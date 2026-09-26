@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import type { HostInfo, JavaStatusView } from '@shared/ipc'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
+import type { HostInfo, JavaStatusView, MinecraftStateView } from '@shared/ipc'
 
 const info = ref<HostInfo | null>(null)
 const java = ref<JavaStatusView | null>(null)
@@ -19,6 +19,55 @@ async function detectJava(): Promise<void> {
   }
 }
 
+const game = ref<MinecraftStateView | null>(null)
+const gameBusy = ref(false)
+const gameVersion = ref('c0.0.21a_01')
+let gameTimer: number | null = null
+
+function stopGamePolling(): void {
+  if (gameTimer !== null) {
+    window.clearInterval(gameTimer)
+    gameTimer = null
+  }
+}
+
+function pollGameStatus(): void {
+  stopGamePolling()
+  gameTimer = window.setInterval(async () => {
+    game.value = await window.mcanextgen.getMinecraftStatus()
+    if (!game.value.running) stopGamePolling()
+  }, 1000)
+}
+
+async function launchGame(): Promise<void> {
+  gameBusy.value = true
+  try {
+    game.value = await window.mcanextgen.launchMinecraft(gameVersion.value)
+    if (game.value.running) pollGameStatus()
+  } catch (err) {
+    game.value = {
+      running: false,
+      versionId: gameVersion.value,
+      pid: null,
+      exitCode: null,
+      exitSignal: null,
+      error: err instanceof Error ? err.message : String(err)
+    }
+  } finally {
+    gameBusy.value = false
+  }
+}
+
+async function stopGame(): Promise<void> {
+  gameBusy.value = true
+  try {
+    game.value = await window.mcanextgen.stopMinecraft()
+    pollGameStatus()
+  } finally {
+    gameBusy.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     info.value = await window.mcanextgen.getInfo()
@@ -27,6 +76,8 @@ onMounted(async () => {
   }
   await detectJava()
 })
+
+onBeforeUnmount(stopGamePolling)
 </script>
 
 <template>
@@ -84,8 +135,45 @@ onMounted(async () => {
       </p>
     </section>
 
+    <section class="runtime">
+      <div class="runtime__head">
+        <span class="runtime__label">Minecraft</span>
+        <span v-if="game?.running" class="runtime__verdict runtime__verdict--ok">
+          Running (pid {{ game.pid }}) — external window, embedding lands in Phase 3
+        </span>
+        <span v-else-if="game && game.exitCode !== null" class="runtime__verdict">
+          Exited with code {{ game.exitCode }}
+        </span>
+        <span v-else-if="game?.error" class="runtime__verdict runtime__verdict--bad">
+          {{ game.error }}
+        </span>
+        <span class="host__spacer" />
+        <select v-model="gameVersion" class="runtime__button" :disabled="game?.running || gameBusy">
+          <option value="c0.0.21a_01">Classic 0.0.21a_01</option>
+        </select>
+        <button
+          v-if="!game?.running"
+          class="runtime__button"
+          :disabled="gameBusy"
+          @click="launchGame"
+        >
+          {{ gameBusy ? 'Launching…' : 'Launch' }}
+        </button>
+        <button
+          v-else
+          class="runtime__button"
+          :disabled="gameBusy"
+          @click="stopGame"
+        >
+          Stop
+        </button>
+      </div>
+    </section>
+
     <footer class="host__bar host__bar--footer">
-      <span class="host__muted">Status: Idle</span>
+      <span class="host__muted">
+        Status: {{ game?.running ? `Game running (pid ${game.pid})` : 'Idle' }}
+      </span>
       <span class="host__spacer" />
       <span v-if="info" class="host__muted">
         {{ info.platform }}/{{ info.arch }} · Electron {{ info.electronVersion }} · Node

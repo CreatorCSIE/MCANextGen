@@ -1,6 +1,6 @@
 > [!IMPORTANT]
-> **项目状态提示**：本项目处于**早期开发阶段**。目前已完成工程脚手架（Phase 0）与 **Java 运行时自动探测**；**游戏启动、原生窗口捕获与嵌入尚未实现**，因此现在克隆仓库还玩不到游戏。
-> *Status Notice: this project is under early development. The scaffolding (Phase 0) and the Java runtime probe are done; launching Minecraft, capturing and embedding its native window are **not implemented yet**.*
+> **项目状态提示**：本项目处于**早期开发阶段**。目前已完成工程脚手架（Phase 0）、**Java 运行时自动探测**与 **Classic 0.0.21a_01 的核心启动**（Phase 1：游戏以独立 Java 8 进程运行、弹出独立窗口）；**原生窗口捕获与嵌入（Phase 2/3/4）尚未实现**，游戏窗口暂时游离在宿主之外。
+> *Status Notice: the scaffolding, the Java runtime probe and the first core launch path (Classic 0.0.21a_01 as a separate Java 8 process with its own window) are done; capturing and embedding the game's native window into the host is **not implemented yet**.*
 
 # MCANextGen - 旧版 Minecraft Applet 桌面宿主 (Legacy Minecraft Applet Desktop Host)
 
@@ -26,7 +26,8 @@ Browser                            MCANextGen Host
 - **Java 运行时自动探测（已可用）**：按 **注册表 → 常见安装目录 → `JAVA_HOME` / `JDK_HOME` → `PATH`** 的优先级收集候选，再对每个候选**实测执行** `java -XshowSettings:properties -version` 读取真实的 `java.version`、`os.arch`、`java.home`，自动合并 JDK 与其自带 JRE 的重复项，**优先选择 64 位 Java 8**，仅在没有任何 64 位可用时回退 32 位。
 - **探测结果可视化**：宿主窗口内直接展示候选列表（版本、架构、发现来源、是否被选中）与被拒绝原因、探测耗时，避免「点了没反应」式黑盒失败。
 - **安全的渲染层边界**：主进程 / preload / 渲染进程之间只有单一 IPC 契约文件（`apps/electron/src/shared/ipc.ts`），渲染进程通过 `contextBridge` 调用，完全不接触 Node API。
-- **规划中（按 plan.md 阶段推进）**：拉起原始 `MinecraftApplet` 进程、原生窗口句柄捕获、Windows 子窗口嵌入 PoC 与嵌入窗口管理、Applet 风格 UI、LWJGL 2 运行时依赖、Linux 支持、Tauri Edition。
+- **旧版客户端核心启动（已可用，Phase 1）**：`runtime/minecraft-host` 以自制的 `AppletStub` 容器直接驱动原始 `com.mojang.minecraft.MinecraftApplet`（不含 AppletLoader 的下载/签名机制），配合随仓库分发的 LWJGL 2.9.3 与 natives，把 Classic 0.0.21a_01 作为独立 Java 8 进程拉起；缺 jar 时宿主报告期望的完整路径，Stop / 退出宿主都会收掉游戏进程。
+- **规划中（按 plan.md 阶段推进）**：原生窗口句柄捕获、Windows 子窗口嵌入 PoC 与嵌入窗口管理、Applet 风格 UI、更多历史版本、Linux 支持、Tauri Edition。
 
 ---
 
@@ -46,7 +47,7 @@ Browser                            MCANextGen Host
 
 > **与参考项目的差异**：这里取代了 MCAHTML 与 MCAJNLP 使用的 `bin/<channel>/` 布局；channel 子目录名保持完全一致，因此从两个参考项目搬运 jar 时只需换一个父目录。
 >
-> **提示**：`assets/minecraft/` 属于 **runtime 层**而非 Electron Edition 独有；当图形化版本管理实现后，若选中的版本缺少 jar，宿主会报告它期望的**完整路径**，按该提示补文件即可。
+> **当前已注册版本**：Classic **0.0.21a_01**（`assets/minecraft/classic/c0.0.21a_01.jar`）。若文件缺失，点击【Launch】时宿主会在错误信息里报告它期望的**完整路径**，按提示补文件即可。`assets/minecraft/` 属于 **runtime 层**而非 Electron Edition 独有，未来的图形化版本管理器也读取同一目录。
 
 ---
 
@@ -83,6 +84,10 @@ cd MCANextGen
 # 安装 workspace 依赖（apps/electron + packages/runtime）
 pnpm install
 
+# （可选）重新编译 Java 侧启动器；产物 runtime/minecraft-host/build/mcanextgen-host.jar 已随仓库提交
+# 需要 JDK 8：$env:JAVA_HOME_8 = "C:\Program Files\Java\jdk1.8.0_xxx"
+powershell -ExecutionPolicy Bypass -File runtime/minecraft-host/build.ps1
+
 # 启动 Electron Edition（带热更新）
 pnpm dev
 
@@ -102,9 +107,14 @@ pnpm typecheck
 MCANextGen
 ├── plan.md                 开发计划（按 Phase 划分）
 ├── assets/
-│   └── minecraft/          历史版本客户端 jar（用户自行放置，不分发）
-│       ├── classic/  ├── indev/  ├── infdev/  ├── alpha/
-│       ├── beta/     ├── release/ └── isom/
+│   ├── minecraft/          历史版本客户端 jar（用户自行放置，不分发）
+│   │   ├── classic/  ├── indev/  ├── infdev/  ├── alpha/
+│   │   ├── beta/     ├── release/ └── isom/
+│   └── lwjgl/2.9.3/        随仓库分发的 LWJGL jar 与 windows natives
+├── runtime/
+│   └── minecraft-host/     Java 8 启动器（AppletStub + 生命周期容器）
+│       ├── src/            javac 1.8 源码
+│       └── build.ps1       构建脚本 → build/mcanextgen-host.jar
 ├── apps/
 │   └── electron/           Electron Edition（Chromium UI + 原生宿主）
 │       └── src/

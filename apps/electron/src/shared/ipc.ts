@@ -8,7 +8,13 @@ export const IPC = {
   /** Returns basic information about the host process. */
   HOST_GET_INFO: 'host:get-info',
   /** Discovers, executes and selects a Java 8 runtime. */
-  JAVA_DETECT: 'java:detect'
+  JAVA_DETECT: 'java:detect',
+  /** Launches the game process for a known version id. */
+  MINECRAFT_LAUNCH: 'minecraft:launch',
+  /** Asks the running game process to terminate. */
+  MINECRAFT_STOP: 'minecraft:stop',
+  /** Current state of the game process (also used for polling). */
+  MINECRAFT_STATUS: 'minecraft:status'
 } as const
 
 export interface HostInfo {
@@ -48,7 +54,22 @@ export interface JavaStatusView {
   durationMs: number
 }
 
+export interface MinecraftStateView {
+  running: boolean
+  /** Version id of the current/last game session, e.g. `c0.0.21a_01`. */
+  versionId: string | null
+  pid: number | null
+  /** Exit status once the game has stopped. */
+  exitCode: number | null
+  exitSignal: string | null
+  /** Last launch failure message (missing jar, no Java 8, …). */
+  error: string | null
+}
+
 export interface HostApi {
   getInfo(): Promise<HostInfo>
   detectJava(): Promise<JavaStatusView>
+  launchMinecraft(versionId: string): Promise<MinecraftStateView>
+  stopMinecraft(): Promise<MinecraftStateView>
+  getMinecraftStatus(): Promise<MinecraftStateView>
 }

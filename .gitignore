@@ -7,6 +7,8 @@ out/
 dist/
 dist-electron/
 *.tsbuildinfo
+# javac intermediates; the packaged jar itself IS distributed (see README)
+runtime/minecraft-host/build/classes/
 
 # runtime data
 .cache/
@@ -20,3 +22,9 @@ coverage/
 # os
 .DS_Store
 Thumbs.db
+
+# Minecraft clients are never distributed: keep the channel skeleton (.gitkeep)
+# but ignore every jar/asset the user drops into assets/minecraft/
+assets/minecraft/**
+!assets/minecraft/**/
+!assets/minecraft/**/*.gitkeep

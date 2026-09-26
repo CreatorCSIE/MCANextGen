@@ -108,13 +108,13 @@ Start the existing Minecraft runtime from Electron.
 
 Tasks:
 
-* [ ] Define Minecraft runtime location
+* [x] Define Minecraft runtime location
 * [x] Define Java 8 runtime selection
-* [ ] Start MinecraftHost / MinecraftApplet
+* [x] Start MinecraftHost / MinecraftApplet
 * [ ] Wait for Minecraft native window
 * [ ] Detect Minecraft window handle
 * [ ] Record the native window handle
-* [ ] Allow manual closing of Minecraft
+* [x] Allow manual closing of Minecraft
 
 ## Minecraft client location
 
@@ -142,6 +142,27 @@ version is missing.
 
 `assets/minecraft/` belongs to the runtime layer, not to the Electron Edition: a future
 Tauri Edition reads the same directory.
+
+## Launch implementation
+
+Implemented in this phase:
+
+* `runtime/minecraft-host` — the Java 8 bootstrap (`org.mcanextgen.host.MinecraftHost`): it
+  realizes the container side of 18.6.1 / 18.6.2 with a `HostStub` (historical
+  document/code base, parameter pass-through, `isActive` always true, no-op resize) and the
+  call order `setStub → setSize → add → validate/setVisible → init → start`. Applet
+  parameters travel as a flat JSON file (`-Dmcanextgen.params`), never on the command line.
+  Build: `runtime/minecraft-host/build.ps1` →
+  `runtime/minecraft-host/build/mcanextgen-host.jar`.
+* `packages/runtime/src/minecraft` — version registry (first entry: `c0.0.21a_01`, applet
+  class `com.mojang.minecraft.MinecraftApplet`), asset layout (`resolveMinecraftLayout`;
+  missing files are reported with the full paths the host expected) and `launchMinecraft`,
+  which spawns the selected Java 8 with the bundled LWJGL jars and natives directory.
+* Electron — `minecraft:launch / minecraft:stop / minecraft:status` IPC, Launch/Stop panel;
+  host shutdown never orphans the game process.
+
+Verified on Windows: the game runs as a separate process with a top-level `Minecraft`
+window and stops cleanly from the host. Window capture and embedding stay in Phase 2/3.
 
 At the end of this phase:
 
@@ -350,6 +371,12 @@ Windows x86_64
 Linux support will be added later.
 
 The runtime must explicitly select the bundled LWJGL native directory.
+
+Vendored since Phase 1 at `assets/lwjgl/2.9.3/` (lwjgl.jar, lwjgl_util.jar, jinput.jar,
+`windows_natives.jar` plus its unpacked `natives/windows/` DLLs; the MCAHTML and MCAJNLP
+copies are byte-identical). `launchMinecraft` passes
+`-Dorg.lwjgl.librarypath` / `-Dnet.java.games.input.librarypath` pointing at that
+directory instead of relying on classpath extraction.
 
 ---
 

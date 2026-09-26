@@ -2,6 +2,12 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath, URL } from 'node:url'
 import { IPC, type HostInfo } from '@shared/ipc'
 import { detectJava } from './java'
+import {
+  launchMinecraftView,
+  minecraftStatusView,
+  shutdownMinecraft,
+  stopMinecraftView
+} from './minecraft'
 
 /** Injected from the package version by electron-vite (see electron.vite.config.ts). */
 declare const __HOST_VERSION__: string
@@ -49,6 +55,11 @@ function registerIpc(): void {
   })
 
   ipcMain.handle(IPC.JAVA_DETECT, () => detectJava())
+  ipcMain.handle(IPC.MINECRAFT_LAUNCH, (_event, versionId: string) =>
+    launchMinecraftView(versionId)
+  )
+  ipcMain.handle(IPC.MINECRAFT_STOP, () => stopMinecraftView())
+  ipcMain.handle(IPC.MINECRAFT_STATUS, () => minecraftStatusView())
 }
 
 app.whenReady().then(() => {
@@ -59,6 +70,9 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+// Phase 1: the game is a separate top-level process; never orphan it when the host exits.
+app.on('before-quit', () => shutdownMinecraft())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
