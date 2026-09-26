@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+out/
+dist/
+dist-electron/
+*.tsbuildinfo
+
+# runtime data
+.cache/
+coverage/
+*.log
+
+# editors
+.idea/
+.vscode/
+
+# os
+.DS_Store
+Thumbs.db

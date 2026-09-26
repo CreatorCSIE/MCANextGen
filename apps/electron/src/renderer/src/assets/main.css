@@ -1,0 +1,33 @@
+:root {
+  color-scheme: dark;
+  --host-bg: #16171b;
+  --host-panel: #1f2126;
+  --host-border: #2c2f36;
+  --host-text: #e6e6e6;
+  --host-muted: #9aa0a6;
+  --host-accent: #4f9d5b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--host-bg);
+  color: var(--host-text);
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}

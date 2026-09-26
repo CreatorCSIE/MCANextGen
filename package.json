@@ -1,0 +1,17 @@
+{
+  "name": "mcanextgen",
+  "version": "0.0.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "description": "A modern desktop host for legacy Minecraft Java Applets",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @mcanextgen/electron dev",
+    "build": "pnpm --filter @mcanextgen/electron build",
+    "preview": "pnpm --filter @mcanextgen/electron preview",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

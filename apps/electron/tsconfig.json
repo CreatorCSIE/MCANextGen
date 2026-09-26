@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "jsx": "preserve",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@main/*": ["src/main/*"],
+      "@shared/*": ["src/shared/*"],
+      "@renderer/*": ["src/renderer/src/*"]
+    }
+  },
+  "include": [
+    "electron.vite.config.ts",
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/renderer/src/**/*.ts",
+    "src/renderer/src/**/*.vue"
+  ]
+}

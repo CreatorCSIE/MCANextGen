@@ -1,0 +1,27 @@
+{
+  "name": "@mcanextgen/electron",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCANextGen Electron Edition",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@mcanextgen/runtime": "workspace:*",
+    "vue": "^3.5.43"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "electron": "^44.4.5",
+    "electron-vite": "^5.0.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.6",
+    "vue-tsc": "^3.3.11"
+  }
+}
