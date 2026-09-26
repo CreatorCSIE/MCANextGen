@@ -290,6 +290,9 @@ MinecraftHost
 
 The runtime must remain independent of Vue.
 
+The `AppletStub` the `MinecraftApplet` lifecycle is driven with follows the contract and call
+order captured in 18.6.1 / 18.6.2.
+
 ---
 
 # 11. Phase 7 — Java 8 Detection
@@ -641,9 +644,15 @@ MCAJNLP
 
 Compare both projects.
 
+MCANextGen does not use AppletLoader (see 18.6). Only `lwjgl_util_applet-modified-for-minecraft`
+matters here, and only for the Stub contract and the lifecycle call order in 18.6.1 / 18.6.2.
+
 ### MinecraftApplet behavior
 
 Compare both projects and identify the common implementation.
+
+For what the applet sees through `AppletStub` (bases, parameters, `isActive`), 18.6 is the
+closest working implementation.
 
 ### Native window embedding
 
@@ -653,7 +662,64 @@ This is a new MCANextGen subsystem.
 
 ---
 
-# 18.6 AI Development Rule
+# 18.6 lwjgl_util_applet-modified-for-minecraft
+
+Location:
+
+```text
+M:\MCWebPort\lwjgl_util_applet-modified-for-minecraft
+```
+
+A LWJGL 2.9.3 `lwjgl_util_applet.jar` fork (BSD 3-Clause) with `AppletLoader` slimmed and
+reworked for modern JREs and community servers: no LWJGL compile-time dependency, no natives
+certificate chain check, deferred `-D` properties (`fix_arguments`), BetaCraft proxy injection,
+Classic 0.0.15a server/zero-latency patch and a `dpi_fix` pass.
+
+MCANextGen does not use AppletLoader at all: the jar downloading, verifying, extracting and
+re-signing machinery is irrelevant here because the host already owns the process, the class
+path and the file system. Only two things are worth referencing from this project.
+
+## 18.6.1 MinecraftStub
+
+`src/org/lwjgl/util/applet/MinecraftStub.java` is the complete contract a bare JVM needs to
+present `MinecraftApplet` as "running inside a browser page". The game only ever sees this
+`AppletStub` via `Applet.setStub(...)`; every behaviour below is what legacy clients actually
+observe on real web pages, so MCANextGen's own Java-side container must reproduce it:
+
+| Member | Reference behavior | Why it matters |
+| :-- | :-- | :-- |
+| `getDocumentBase()` / `getCodeBase()` | both hard-code `http://www.minecraft.net/game/` | classic/Indev/Alpha clients resolve skins, sounds, `/mp` server lists and `getResourceAsStream` paths against these bases; keeping the historical URL preserves the original code paths (a proxy such as BetaCraft can still redirect them) |
+| `getParameter(name)` | delegates to the host parameters | this is the only channel through which `username`, `sessionid`, `server`, `port`, `ww`, `hh`, etc. reach the game |
+| `getAppletContext()` | delegates to the host context | needed for `showDocument` style calls and audio APIs on some versions |
+| `isActive()` | always `true` | the game polls it to decide whether to keep rendering / to pause on `stop()`; a desktop host window must not pretend the page went hidden |
+| `appletResize(w, h)` | no-op | resizing is owned by the host layout / native window embedding, the applet must not try to resize a browser frame |
+
+## 18.6.2 Applet lifecycle skeleton
+
+`AppletLoader.run()` also shows the exact order in which the applet must be woken up, which is
+the order MCANextGen's container should follow (see Phase 6):
+
+```text
+Thread.currentThread().setContextClassLoader(classLoader)   // the game reads LWJGL resources
+                                                            // through the context loader
+appletClass = classLoader.loadClass(getParameter("al_main")) // e.g. net.minecraft.client.MinecraftApplet
+lwjglApplet = (Applet) appletClass.newInstance()
+lwjglApplet.setStub(new MinecraftStub(...))                  // BEFORE any other call
+lwjglApplet.setSize(getWidth(), getHeight())
+container.setLayout(new BorderLayout())
+container.add(lwjglApplet)
+container.validate()                                         // realizes the Canvas, native peer appears
+lwjglApplet.init()                                           // LWJGL Display/Canvas is grabbed here
+lwjglApplet.start()                                          // game thread starts
+```
+
+`stop()` and `destroy()` are forwarded to the inner applet 1:1 when the host wants to pause or
+close the game. The LWJGL native window of `MinecraftApplet` is created during `init()`/`start()`
+from the awt Canvas peer — this is what Phase 2 later needs to locate and embed.
+
+---
+
+# 18.7 AI Development Rule
 
 Before modifying Minecraft-related code, AI should first search the reference projects.
 
