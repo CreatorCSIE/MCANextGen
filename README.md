@@ -26,16 +26,17 @@ Browser                            MCANextGen Host
 - **Java 运行时自动探测（已可用）**：按 **注册表 → 常见安装目录 → `JAVA_HOME` / `JDK_HOME` → `PATH`** 的优先级收集候选，再对每个候选**实测执行** `java -XshowSettings:properties -version` 读取真实的 `java.version`、`os.arch`、`java.home`，自动合并 JDK 与其自带 JRE 的重复项，**优先选择 64 位 Java 8**，仅在没有任何 64 位可用时回退 32 位。
 - **探测结果可视化**：宿主窗口内直接展示候选列表（版本、架构、发现来源、是否被选中）与被拒绝原因、探测耗时，避免「点了没反应」式黑盒失败。
 - **安全的渲染层边界**：主进程 / preload / 渲染进程之间只有单一 IPC 契约文件（`apps/electron/src/shared/ipc.ts`），渲染进程通过 `contextBridge` 调用，完全不接触 Node API。
-- **旧版客户端核心启动（已可用，Phase 1）**：`runtime/minecraft-host` 以自制的 `AppletStub` 容器直接驱动原始 `com.mojang.minecraft.MinecraftApplet`（不含 AppletLoader 的下载/签名机制），配合随仓库分发的 LWJGL 2.9.3 与 natives，把 Classic 0.0.21a_01 作为独立 Java 8 进程拉起；缺 jar 时宿主报告期望的完整路径，Stop / 退出宿主都会收掉游戏进程。
+- **旧版客户端核心启动（已可用，Phase 1）**：`runtime/minecraft-host` 以自制的 `AppletStub` 容器直接驱动原始 `com.mojang.minecraft.MinecraftApplet`（不含 AppletLoader 的下载/签名机制），配合随仓库分发的 LWJGL 2.9.3 与 natives，把 Classic 0.0.21a_01 作为独立 Java 8 进程拉起；游戏窗口客户区精确等于设定分辨率（`setPreferredSize + pack()`）。缺 jar 时宿主报告期望的完整路径，Stop / 退出宿主都会收掉游戏进程。
+- **移植参考项目的 JVM 参数组（已可用）**：`java_arguments` + `fix_arguments`（MCAHTML 与 MCAJNLP 共用同一套）已接入 `packages/runtime/src/minecraft/arguments.ts`——含 Betacraft 兼容代理（历史客户端硬编码的 `www.minecraft.net` HTTP 流量重定向）、渲染修复五连（`noddraw` / `noerasebackground` / `d3d` / `opengl` / `pmoffscreen`）、`useLegacyMergeSort`（经典版比较器不满足 TimSort 契约）与内存上限，调用方可整体覆写。
 - **规划中（按 plan.md 阶段推进）**：原生窗口句柄捕获、Windows 子窗口嵌入 PoC 与嵌入窗口管理、Applet 风格 UI、更多历史版本、Linux 支持、Tauri Edition。
 
 ---
 
 ## 📁 客户端 JAR 包放置指引 (Client JAR Placement)
 
-⚠️ **特别说明（版权合规）**：受 DMCA 与版权合规限制，**本 GitHub 仓库不提供、不分发任何官方 Minecraft 游戏 `.jar` 客户端文件**（仓库仅包含宿主与启动器源码，干净克隆后各 channel 目录为空）。
+⚠️ **特别说明（版权合规）**：受 DMCA 与版权合规限制，**本 GitHub 仓库不提供、不分发任何官方 Minecraft 游戏 `.jar` 客户端文件**（仓库仅包含宿主与启动器源码；各 channel 目录已预建占位，干净克隆后除 `.gitkeep` 外为空）。
 
-请自行准备或提取您的 Minecraft 历史版本 `.jar` 文件，并放置在**仓库级的 `assets/minecraft/` 目录**下对应的 channel 子文件夹中：
+请自行准备或提取您的 Minecraft 历史版本 `.jar` 文件，并放置在**仓库级的 `assets/minecraft/` 目录**下对应的 channel 子文件夹中（`.gitignore` 已排除该目录下的一切文件，放入后不会被误提交）：
 
 - **Classic JAR**：放置于 `assets/minecraft/classic/`（例如 `assets/minecraft/classic/c0.0.21a_01.jar`）
 - **Indev JAR**：放置于 `assets/minecraft/indev/`（例如 `assets/minecraft/indev/in-20100223.jar`）
@@ -114,7 +115,8 @@ MCANextGen
 ├── runtime/
 │   └── minecraft-host/     Java 8 启动器（AppletStub + 生命周期容器）
 │       ├── src/            javac 1.8 源码
-│       └── build.ps1       构建脚本 → build/mcanextgen-host.jar
+│       ├── build/          mcanextgen-host.jar（随仓库分发；classes 不入库）
+│       └── build.ps1       构建脚本
 ├── apps/
 │   └── electron/           Electron Edition（Chromium UI + 原生宿主）
 │       └── src/
@@ -124,7 +126,9 @@ MCANextGen
 │           └── shared/     main / preload / renderer 的唯一契约
 └── packages/
     └── runtime/            Minecraft 运行时层，与 Vue / Electron 无关
-        └── src/java/       Java 发现、探测与 Java 8 选择
+        └── src/
+            ├── java/       Java 发现、探测与 Java 8 选择
+            └── minecraft/  版本注册表、资产布局、JVM 参数组与进程启动
 ```
 
 ---
@@ -162,14 +166,13 @@ node install.js
 
 workspace 清单必须是 **`pnpm-workspace.yaml`**（不是 `.yml`），且请在**仓库根目录**执行 `pnpm` 命令；`apps/*` 与 `packages/*` 已在该文件中声明。
 
-### 4. 游戏报 `java.security.AccessControlException`（待游戏侧实现后适用）
+### 4. 还需要像参考项目那样改 `java.policy` 吗？——不需要
 
-Java 默认沙箱会限制本地文件读写与 Socket。参考项目的既有做法是在所用 JRE/JDK 的 `lib\security\java.policy` 的 `grant { ... };` 末尾追加：
+MCAJNLP 走 `javaws`（Java Web Start 沙箱）、MCAHTML 走浏览器 NPAPI 插件，因此需要在 JRE 的 `lib\security\java.policy` 里追加 `SocketPermission` / `AllPermission`。**MCANextGen 以普通 `java -cp` 方式启动游戏进程，没有 Applet 沙箱**，本地读写与 Socket 天然可用，无需改动任何 policy 文件。
 
-```text
-permission java.net.SocketPermission "*:*", "accept,connect,resolve";
-permission java.security.AllPermission;
-```
+### 5. 高 DPI 屏上游戏窗口发糊 / 与 Betacraft 窗口同尺寸不同清晰度
+
+系统 Java 8 的 `java.exe` 是 DPI-unaware：Windows 会按缩放比例（如 150%）对窗口做位图拉伸，物理尺寸正确但内容模糊；Betacraft 自带打了 DPI-aware manifest 的 JRE 所以像素原生。这属于已知差异，宿主嵌入（Phase 3/4）后将以物理像素传尺寸统一处理。
 
 ---
 
