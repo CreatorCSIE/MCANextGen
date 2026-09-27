@@ -105,11 +105,14 @@ pnpm preview
 pnpm typecheck
 ```
 
+> **CI（临时最简闸门）**：上述 `typecheck` / `build` 以及「用 JDK 8 重编 `mcanextgen-host.jar`」已在 GitHub Actions 中自动化——`push`（main/master）与所有 PR 触发，见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。所有客户端 jar 均被 gitignore，CI 不依赖任何受版权保护资产、也不启动游戏；待 Phase 4（打包产物）与 Phase 9（跨平台矩阵）引入后本工作流会被替换。
+
 ### 2. 仓库结构 (Repository Layout)
 
 ```text
 MCANextGen
 ├── plan.md                 开发计划（按 Phase 划分）
+├── .github/workflows/      GitHub Actions 静态 CI（typecheck + build + JDK 8 jar 重编，临时最简闸门）
 ├── assets/
 │   ├── minecraft/          历史版本客户端 jar（用户自行放置，不分发）
 │   │   ├── classic/  ├── indev/  ├── infdev/  ├── alpha/
