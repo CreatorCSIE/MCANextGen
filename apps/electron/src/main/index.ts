@@ -5,6 +5,7 @@ import { detectJava } from './java'
 import {
   getMinecraftStatusView,
   launchMinecraftView,
+  listMinecraftAppletsView,
   listMinecraftVersionsView,
   shutdownMinecraft,
   stopMinecraftView
@@ -64,6 +65,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.MINECRAFT_STOP, () => stopMinecraftView())
   ipcMain.handle(IPC.MINECRAFT_STATUS, () => getMinecraftStatusView())
   ipcMain.handle(IPC.MINECRAFT_LIST_VERSIONS, () => listMinecraftVersionsView())
+  ipcMain.handle(IPC.MINECRAFT_LIST_APPLETS, (_event, versionId: string) =>
+    listMinecraftAppletsView(versionId)
+  )
 }
 
 app.whenReady().then(() => {

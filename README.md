@@ -4,7 +4,7 @@
 
 # MCANextGen - 旧版 Minecraft Applet 桌面宿主 (Legacy Minecraft Applet Desktop Host)
 
-`MCANextGen` 是一个**面向 Minecraft 早期历史版本（Classic、Indev、Infdev、Alpha、Beta、Release 与 Infinite Map Visualizer）Java Applet 的现代桌面宿主**。
+`MCANextGen` 是一个**面向 Minecraft 早期历史版本（Classic、Indev、Infdev、Alpha、Beta 与 Release，其中 Infdev/Alpha jar 内置 Infinite Map Visualizer 预览入口）Java Applet 的现代桌面宿主**。
 
 它的目标**不是再做一款 Minecraft 启动器**，而是在桌面环境里重建当年「浏览器 + Applet」的运行时关系：游戏仍然以原始的 Java / LWJGL 进程运行，而宿主进程拥有它被嵌入的那块原生窗口。
 
@@ -45,7 +45,8 @@ Browser                            MCANextGen Host
 - **Alpha JAR**：放置于 `assets/minecraft/alpha/`
 - **Beta JAR**：放置于 `assets/minecraft/beta/`
 - **Release JAR**：放置于 `assets/minecraft/release/`
-- **Infinite Map Visualizer JAR**：放置于 `assets/minecraft/isom/`
+
+> **为什么没有 isom 目录**：Infinite Map Visualizer 不是独立版本——infdev 20100617 的 jar 里同时含 `net.minecraft.client.MinecraftApplet` 与 `net.minecraft.isom.IsomPreviewApplet` 两个入口类。宿主会在后台（headless、无窗口）扫描所选 jar 并枚举全部可启动的 Applet 入口，MCAHTML/MCAJNLP 手工维护的 isom 渠道在这里只是启动面板里的一个入口选择。
 
 > **与参考项目的差异**：这里取代了 MCAHTML 与 MCAJNLP 使用的 `bin/<channel>/` 布局；channel 子目录名保持完全一致，因此从两个参考项目搬运 jar 时只需换一个父目录。
 >
@@ -111,7 +112,7 @@ MCANextGen
 ├── assets/
 │   ├── minecraft/          历史版本客户端 jar（用户自行放置，不分发）
 │   │   ├── classic/  ├── indev/  ├── infdev/  ├── alpha/
-│   │   ├── beta/     ├── release/ └── isom/
+│   │   ├── beta/     └── release/
 │   └── lwjgl/2.9.3/        随仓库分发的 LWJGL jar 与 windows natives
 ├── runtime/
 │   └── minecraft-host/     Java 8 启动器（AppletStub + 生命周期容器）

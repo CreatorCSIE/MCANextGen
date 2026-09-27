@@ -8,7 +8,9 @@ const api: HostApi = {
     ipcRenderer.invoke(IPC.MINECRAFT_LAUNCH, versionId, options),
   stopMinecraft: () => ipcRenderer.invoke(IPC.MINECRAFT_STOP),
   getMinecraftStatus: () => ipcRenderer.invoke(IPC.MINECRAFT_STATUS),
-  listMinecraftVersions: () => ipcRenderer.invoke(IPC.MINECRAFT_LIST_VERSIONS)
+  listMinecraftVersions: () => ipcRenderer.invoke(IPC.MINECRAFT_LIST_VERSIONS),
+  listMinecraftApplets: (versionId: string) =>
+    ipcRenderer.invoke(IPC.MINECRAFT_LIST_APPLETS, versionId)
 }
 
 contextBridge.exposeInMainWorld('mcanextgen', api)

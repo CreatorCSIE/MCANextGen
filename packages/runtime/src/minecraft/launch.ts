@@ -25,6 +25,7 @@ import type { MinecraftLayout } from './layout'
 import { missingMinecraftAssets } from './layout'
 import { DEFAULT_GAME_JVM_ARGUMENTS } from './arguments'
 import type { MinecraftFix, MinecraftVersion } from './version'
+import { appletWindowTitle } from './applets'
 
 export interface MinecraftLaunchOptions {
   /** Absolute path of a probed Java 8 `java` executable. */
@@ -32,6 +33,12 @@ export interface MinecraftLaunchOptions {
   /** Filesystem layout to launch from (see layout.ts). */
   layout: MinecraftLayout
   version: MinecraftVersion
+  /**
+   * Override the registry's applet entry class — e.g. picking
+   * `net.minecraft.isom.IsomPreviewApplet` inside an infdev 20100617 jar
+   * (see applets.ts; this is why no separate isom channel/folder exists).
+   */
+  appletClass?: string
   /** Directory the game process runs in; classic clients write levels relative to it. */
   cwd?: string
   /** Window title reported by the Java host frame. */
@@ -131,16 +138,19 @@ export async function launchMinecraft(options: MinecraftLaunchOptions): Promise<
 
   const hostMainClass = 'org.mcanextgen.host.MinecraftHost'
   const jvmArguments = options.jvmArguments ?? DEFAULT_GAME_JVM_ARGUMENTS
+  const entryAppletClass = options.appletClass ?? version.appletClass
   const args = [
     ...jvmArguments,
     `-Dorg.lwjgl.librarypath=${layout.nativesDir}`,
     `-Dnet.java.games.input.librarypath=${layout.nativesDir}`,
     `-Dmcanextgen.jars=${[layout.clientJar, ...layout.lwjglJars].join(path.delimiter)}`,
-    `-Dmcanextgen.appletClass=${version.appletClass}`,
+    `-Dmcanextgen.appletClass=${entryAppletClass}`,
     `-Dmcanextgen.params=${paramsFile}`,
     `-Dmcanextgen.width=${options.width ?? version.width}`,
     `-Dmcanextgen.height=${options.height ?? version.height}`,
-    `-Dmcanextgen.title=${options.title ?? 'Minecraft'}`,
+    // Alternate entry classes are separate programs (e.g. the isom preview);
+    // they get their own window title instead of sharing "Minecraft".
+    `-Dmcanextgen.title=${options.title ?? appletWindowTitle(entryAppletClass) ?? 'Minecraft'}`,
     '-cp',
     layout.hostJar,
     hostMainClass

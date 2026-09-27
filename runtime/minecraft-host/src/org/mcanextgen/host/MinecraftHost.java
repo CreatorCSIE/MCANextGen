@@ -8,9 +8,17 @@ import java.awt.Frame;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.List;
 import java.util.Map;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 
 /**
  * MCANextGen Java 侧启动入口。
@@ -24,6 +32,12 @@ import java.util.Map;
 public final class MinecraftHost {
 
     public static void main(String[] args) throws Exception {
+        // runtime 层的入口类枚举模式（--list-applets）：headless 扫描 jar，
+        // 不创建任何窗口，输出 "MCANEXTGEN_APPLET <类名>" 供 TS 侧解析。
+        if (args.length > 0 && "--list-applets".equals(args[0])) {
+            listAppletClasses();
+            return;
+        }
         final Map<String, String> parameters = HostStub.loadParameters(
                 System.getProperty("mcanextgen.params"));
         final String appletClass = System.getProperty(
@@ -114,6 +128,61 @@ public final class MinecraftHost {
             urls[i] = new File(entries[i]).getAbsoluteFile().toURI().toURL();
         }
         return new URLClassLoader(urls, ClassLoader.getSystemClassLoader());
+    }
+
+    /**
+     * 枚举 -Dmcanextgen.scanJar 指向的客户端 jar 里全部可启动的 Applet 子类，
+     * 每行输出 {@code MCANEXTGEN_APPLET <全限定类名>}。
+     *
+     * 用真实的 isAssignableFrom 判定而非类名启发式——infdev 20100617 的 jar
+     * 同时含 net.minecraft.client.MinecraftApplet 与
+     * net.minecraft.isom.IsomPreviewApplet（MCAHTML/MCAJNLP 手工硬编码的
+     * isom 渠道其实就是这里的第二个入口类）。只 load 不 initialize，
+     * 不会触发任何游戏静态初始化，全程 headless 无窗口。
+     */
+    private static void listAppletClasses() throws Exception {
+        String scanJar = System.getProperty("mcanextgen.scanJar");
+        if (scanJar == null || scanJar.trim().isEmpty()) {
+            System.err.println("[mcanextgen][applets] 缺少 -Dmcanextgen.scanJar");
+            System.exit(2);
+        }
+        ClassLoader loader = buildClassLoader();
+        Thread.currentThread().setContextClassLoader(loader);
+        List<String> found = new ArrayList<String>();
+        JarFile jar = new JarFile(new File(scanJar));
+        try {
+            Enumeration<JarEntry> entries = jar.entries();
+            while (entries.hasMoreElements()) {
+                String name = entries.nextElement().getName();
+                // 跳过内部类（MinecraftApplet$1 之类不是独立入口）
+                if (!name.endsWith(".class") || name.indexOf('$') >= 0) {
+                    continue;
+                }
+                String className = name
+                        .substring(0, name.length() - ".class".length())
+                        .replace('/', '.');
+                try {
+                    Class<?> candidate = loader.loadClass(className);
+                    if (!Applet.class.isAssignableFrom(candidate)
+                            || Modifier.isAbstract(candidate.getModifiers())) {
+                        continue;
+                    }
+                    Constructor<?> ctor = candidate.getDeclaredConstructor();
+                    if (!Modifier.isPublic(ctor.getModifiers())) {
+                        continue;
+                    }
+                    found.add(className);
+                } catch (Throwable ignored) {
+                    // 依赖缺失、缺无参构造等：不是可用入口，跳过
+                }
+            }
+        } finally {
+            jar.close();
+        }
+        Collections.sort(found);
+        for (String className : found) {
+            System.out.println("MCANEXTGEN_APPLET " + className);
+        }
     }
 
     private MinecraftHost() {

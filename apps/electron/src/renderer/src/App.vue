@@ -37,14 +37,39 @@ const fixToggles = ref<Array<MinecraftFixView & { enabled: boolean }>>([])
 const server = ref('')
 const port = ref('')
 
+/**
+ * Applet 入口类（临时下拉方案，正式 UI 设计时再重做）：
+ * jar 扫描发现 >1 个入口才显示（infdev 20100617 = 常规客户端 + isom 预览），
+ * 单入口/扫描失败都退回注册表默认值。
+ */
+const appletChoices = ref<string[]>([])
+const appletClass = ref('')
+let appletScanSeq = 0
+
 const selectedVersion = computed(
   () => gameVersions.value.find((option) => option.id === gameVersion.value) ?? null
 )
+
+async function refreshAppletChoices(versionId: string): Promise<void> {
+  if (versionId === '') return
+  const seq = ++appletScanSeq
+  appletChoices.value = []
+  appletClass.value = ''
+  try {
+    const scan = await window.mcanextgen.listMinecraftApplets(versionId)
+    if (seq !== appletScanSeq) return
+    appletClass.value = scan.defaultAppletClass
+    appletChoices.value = scan.appletClasses.length > 1 ? scan.appletClasses : []
+  } catch {
+    // 枚举失败不阻塞启动：保持注册表默认入口，下拉不出现
+  }
+}
 
 watch(
   selectedVersion,
   (version) => {
     fixToggles.value = (version?.fixes ?? []).map((fix) => ({ ...fix, enabled: fix.defaultEnabled }))
+    void refreshAppletChoices(version?.id ?? '')
   },
   { immediate: true }
 )
@@ -72,7 +97,8 @@ async function launchGame(): Promise<void> {
     if (port.value.trim() !== '') extraParameters.port = port.value.trim()
     game.value = await window.mcanextgen.launchMinecraft(gameVersion.value, {
       fixesEnabled: fixToggles.value.filter((fix) => fix.enabled).map((fix) => fix.kind),
-      extraParameters
+      extraParameters,
+      appletClass: appletClass.value === '' ? undefined : appletClass.value
     })
     if (game.value.running) pollGameStatus()
   } catch (err) {
@@ -212,6 +238,19 @@ onBeforeUnmount(stopGamePolling)
         >
           <input v-model="fix.enabled" type="checkbox" :disabled="game?.running || gameBusy" />
           {{ fix.label }}
+        </label>
+        <!-- 临时下拉：jar 内发现多个 Applet 入口（如 infdev 20100617 的 isom 预览）才出现 -->
+        <label v-if="appletChoices.length > 1" class="runtime__check">
+          Applet 入口
+          <select
+            v-model="appletClass"
+            class="runtime__input runtime__input--applet"
+            :disabled="game?.running || gameBusy"
+          >
+            <option v-for="entry in appletChoices" :key="entry" :value="entry">
+              {{ entry }}
+            </option>
+          </select>
         </label>
         <span class="host__spacer" />
         <input
@@ -391,6 +430,11 @@ onBeforeUnmount(stopGamePolling)
 
 .runtime__input--port {
   width: 72px;
+}
+
+.runtime__input--applet {
+  width: auto;
+  max-width: 300px;
 }
 
 .runtime__input:disabled {

@@ -8,14 +8,16 @@ import path from 'node:path'
 import { app } from 'electron'
 import {
   detectJavaRuntime,
+  getMinecraftVersion,
   KNOWN_VERSIONS,
   launchMinecraft,
+  listAppletClasses,
   MinecraftLaunchError,
   resolveMinecraftLayout,
-  getMinecraftVersion,
   type MinecraftGame
 } from '@mcanextgen/runtime'
 import type {
+  MinecraftAppletList,
   MinecraftLaunchOptionsView,
   MinecraftStateView,
   MinecraftVersionOptionView
@@ -60,6 +62,32 @@ export function listMinecraftVersionsView(): MinecraftVersionOptionView[] {
   }))
 }
 
+/**
+ * Headless scan of the version's client jar for launchable Applet entry
+ * classes (infdev 20100617 carries the isom preview next to the regular
+ * client). Failures degrade to "default only" so the panel never blocks on
+ * an exotic jar.
+ */
+export async function listMinecraftAppletsView(versionId: string): Promise<MinecraftAppletList> {
+  const fallback = (error: string): MinecraftAppletList => ({
+    appletClasses: [],
+    defaultAppletClass: getMinecraftVersion(versionId).appletClass,
+    error
+  })
+  try {
+    const version = getMinecraftVersion(versionId)
+    const layout = resolveMinecraftLayout(repoRoot(), version)
+    const report = await detectJavaRuntime()
+    const java = report.selection.installation
+    if (!java) return fallback(report.selection.reason ?? '未找到可用的 Java 8 运行时')
+    const scan = await listAppletClasses(java.executable, layout)
+    return { appletClasses: scan.appletClasses, defaultAppletClass: version.appletClass, error: null }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return fallback(message)
+  }
+}
+
 export async function launchMinecraftView(
   versionId: string,
   options?: MinecraftLaunchOptionsView
@@ -87,7 +115,8 @@ export async function launchMinecraftView(
       // "all optional patches off", so it must not degrade to the registry
       // default (undefined).
       fixesEnabled: options?.fixesEnabled ?? undefined,
-      extraParameters: options?.extraParameters ?? undefined
+      extraParameters: options?.extraParameters ?? undefined,
+      appletClass: options?.appletClass ?? undefined
     })
     game.onExit(() => {
       // Keep the finished session around so the panel can show pid/exit code

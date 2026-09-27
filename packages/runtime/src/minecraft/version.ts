@@ -10,6 +10,13 @@
  * adding a tested version means adding one entry here.
  */
 
+/**
+ * Channels are jar folders under `assets/minecraft/`. There is deliberately no
+ * `isom` channel: the Infinite Map Visualizer is not a version of its own —
+ * infdev 20100617 jars ship `net.minecraft.isom.IsomPreviewApplet` next to the
+ * regular `MinecraftApplet`, and the launch panel picks it as an alternate
+ * entry class (see applets.ts).
+ */
 export type MinecraftChannel =
   | 'classic'
   | 'indev'
@@ -17,7 +24,6 @@ export type MinecraftChannel =
   | 'alpha'
   | 'beta'
   | 'release'
-  | 'isom'
 
 /**
  * Host-side patches ported from the LWJGL fork's AppletLoader
@@ -165,11 +171,32 @@ export const INDEV_20100223: MinecraftVersion = {
   height: 480
 }
 
+/**
+ * First infdev test version, and the one that proves out the entry-class
+ * dropdown: the jar ships *two* launchable applets — the regular
+ * `net.minecraft.client.MinecraftApplet` and the Infinite Map Visualizer
+ * `net.minecraft.isom.IsomPreviewApplet` — which the headless scan (see
+ * applets.ts) enumerates so the launch panel can pick between them.
+ * Byte-identical (SHA256 E095146F…) to the `inf-20100617-2` re-upload, so the
+ * entry-class verification done against `-2` applies here directly.
+ */
+export const INFDEV_20100617_1531: MinecraftVersion = {
+  id: 'inf-20100617-1531',
+  channel: 'infdev',
+  label: 'Infdev 20100617-1531 [isom entry test]',
+  jar: 'assets/minecraft/infdev/inf-20100617-1531.jar',
+  appletClass: 'net.minecraft.client.MinecraftApplet',
+  parameters: {},
+  width: 854,
+  height: 480
+}
+
 export const KNOWN_VERSIONS: readonly MinecraftVersion[] = [
   CLASSIC_C0_0_21A_01,
   CLASSIC_C0_0_12A_03_200018,
   CLASSIC_C0_0_15A_05311904,
-  INDEV_20100223
+  INDEV_20100223,
+  INFDEV_20100617_1531
 ]
 
 export function getMinecraftVersion(id: string): MinecraftVersion {

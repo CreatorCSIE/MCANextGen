@@ -16,7 +16,9 @@ export const IPC = {
   /** Current state of the game process (also used for polling). */
   MINECRAFT_STATUS: 'minecraft:status',
   /** Registered versions for the picker, straight from the runtime registry. */
-  MINECRAFT_LIST_VERSIONS: 'minecraft:list-versions'
+  MINECRAFT_LIST_VERSIONS: 'minecraft:list-versions',
+  /** Enumerates the Applet entry classes inside a version's client jar (headless scan). */
+  MINECRAFT_LIST_APPLETS: 'minecraft:list-applets'
 } as const
 
 export interface HostInfo {
@@ -93,6 +95,22 @@ export interface MinecraftLaunchOptionsView {
   fixesEnabled?: MinecraftFixKind[]
   /** `server`/`port` from the connection fields; blank entries are dropped. */
   extraParameters?: Record<string, string>
+  /** Applet entry class override picked from the jar scan (e.g. the isom preview). */
+  appletClass?: string
+}
+
+/** Result of the headless `--list-applets` scan for one version's jar. */
+export interface MinecraftAppletList {
+  /**
+   * Launchable Applet entry classes found in the jar, sorted. One entry means
+   * nothing to choose and the panel hides the dropdown; several (infdev
+   * 20100617: regular client + `net.minecraft.isom.IsomPreviewApplet`) enable it.
+   */
+  appletClasses: string[]
+  /** The registry default the dropdown should preselect. */
+  defaultAppletClass: string
+  /** Scan failure message; empty on success (the panel then just keeps the default). */
+  error: string | null
 }
 
 export interface HostApi {
@@ -102,4 +120,5 @@ export interface HostApi {
   stopMinecraft(): Promise<MinecraftStateView>
   getMinecraftStatus(): Promise<MinecraftStateView>
   listMinecraftVersions(): Promise<MinecraftVersionOptionView[]>
+  listMinecraftApplets(versionId: string): Promise<MinecraftAppletList>
 }

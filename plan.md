@@ -128,13 +128,15 @@ assets/
     ├── infdev/
     ├── alpha/
     ├── beta/
-    ├── release/
-    └── isom/
+    └── release/
 ```
 
 This replaces the `bin/<channel>/` layout used by MCAHTML and MCAJNLP. The channel names
 stay the same, so a `.jar` copied out of either reference project only needs a different
-parent directory.
+parent directory — with one deliberate exception: there is no `isom/` directory. The
+Infinite Map Visualizer is not a channel but a second Applet entry class
+(`net.minecraft.isom.IsomPreviewApplet`) bundled inside infdev 20100617 jars; the launch
+panel discovers entry classes by scanning the selected jar in a headless JVM instead.
 
 MCANextGen does not distribute official Minecraft clients. A channel directory is empty on
 a fresh clone, and the host must report which `.jar` path it expected when a selected
