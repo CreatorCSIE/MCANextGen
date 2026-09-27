@@ -1,0 +1,66 @@
+# 临时静态 CI：只守类型/构建/jar 编译，待 Phase 4 打包与 Phase 9 跨平台矩阵引入后本文件会被替换。
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# 同一分支上的旧任务在有新提交时自动取消，省 runner。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # TS 侧闸门：workspace 类型检查 + Electron main/preload/renderer 打包。
+  # 所有 Minecraft 客户端 jar 都被 gitignore，这里不依赖任何受版权保护的资产，
+  # 也不启动游戏（无窗口，托管 runner 足够）。
+  static:
+    name: Typecheck & build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        # 版本从 package.json 的 packageManager 字段读取（pnpm@10.34.5）
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (workspace)
+        run: pnpm -r typecheck
+
+      - name: Build (Electron Edition)
+        run: pnpm build
+
+  # Java 侧闸门：用真正的 JDK 8 重新编译启动器，确认 MinecraftHost.java / Patches.java
+  # 能干净产出 mcanextgen-host.jar。
+  # 注意：这里刻意不做 `git diff` 比对已提交 jar——jar 是含时间戳的 zip，
+  # 跨机器不可能字节一致，比对必然误报。陈旧性由提交者本地重编保证。
+  host-jar:
+    name: Compile host jar (JDK 8)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Build mcanextgen-host.jar
+        shell: pwsh
+        run: |
+          $env:JAVA_HOME_8 = $env:JAVA_HOME
+          ./runtime/minecraft-host/build.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Test-Path runtime/minecraft-host/build/mcanextgen-host.jar |
+            ForEach-Object { if (-not $_) { throw 'jar not produced' } }
