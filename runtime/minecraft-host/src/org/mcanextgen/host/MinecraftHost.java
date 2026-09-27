@@ -67,9 +67,27 @@ public final class MinecraftHost {
                 applet.setSize(width, height);
             }
         });
+
+        // 补丁开关与当年 <embed> 的参数名一致（runtime 层按版本注册表注入，见 version.ts）
+        final boolean patch15a = "true".equals(parameters.get("15a_server_patch"));
+        final boolean dpiFix = "true".equals(parameters.get("dpi_fix"));
         EventQueue.invokeAndWait(new Runnable() {
             public void run() {
-                applet.init();
+                if (patch15a) {
+                    // 用反射组装替代原生 init()，避开硬编码多人地址的连接探测
+                    try {
+                        Patches.patchClassic15a(applet, parameters);
+                    } catch (Throwable t) {
+                        System.err.println("[mcanextgen][15a] 组装失败，回退原生 init(): " + t);
+                        applet.init();
+                    }
+                } else {
+                    applet.init();
+                }
+                if (dpiFix) {
+                    // init() 已创建 Minecraft 实例、start() 尚未读取尺寸——正是改写窗口
+                    Patches.applyDpiFix(applet);
+                }
                 applet.start();
             }
         });

@@ -1,82 +1,120 @@
 /**
- * Main-process view over the runtime launch layer: owns the single game
- * session and maps it to the serialisable `MinecraftStateView` contract.
+ * Main-process view of a Minecraft game session: launches the game through
+ * the runtime layer, keeps a single running session and maps it to a
+ * serialisable `MinecraftStateView` for the renderer.
  */
 
-import { app } from 'electron'
 import path from 'node:path'
+import { app } from 'electron'
 import {
   detectJavaRuntime,
-  getMinecraftVersion,
+  KNOWN_VERSIONS,
   launchMinecraft,
+  MinecraftLaunchError,
   resolveMinecraftLayout,
+  getMinecraftVersion,
   type MinecraftGame
 } from '@mcanextgen/runtime'
-import type { MinecraftStateView } from '../shared/ipc'
+import type {
+  MinecraftLaunchOptionsView,
+  MinecraftStateView,
+  MinecraftVersionOptionView
+} from '../shared/ipc'
+
+/**
+ * Repository root, used to locate `assets/` and the built host jar.
+ * dev/preview: appPath is apps/electron; packaged: resources/app.asar
+ * (assets unpack next to it) — embedding-time packaging lands in Phase 4.
+ */
+function repoRoot(): string {
+  return app.isPackaged
+    ? path.resolve(app.getAppPath(), '..')
+    : path.resolve(app.getAppPath(), '..', '..')
+}
 
 let game: MinecraftGame | null = null
 let lastError: string | null = null
 
-/** Repository root in dev and preview alike: apps/electron -> ../.. */
-function repoRoot(): string {
-  return path.resolve(app.getAppPath(), '..', '..')
-}
-
-function statusView(): MinecraftStateView {
-  if (!game) {
-    return {
-      running: false,
-      versionId: null,
-      pid: null,
-      exitCode: null,
-      exitSignal: null,
-      error: lastError
-    }
-  }
-  const exit = game.exitInfo()
+function toView(): MinecraftStateView {
+  const exit = game?.exitInfo() ?? null
   return {
-    running: game.running(),
-    versionId: game.versionId,
-    pid: game.pid,
+    running: game?.running() ?? false,
+    versionId: game?.versionId ?? null,
+    pid: game?.pid ?? null,
     exitCode: exit?.code ?? null,
     exitSignal: exit?.signal ?? null,
     error: lastError
   }
 }
 
-export async function launchMinecraftView(versionId: string): Promise<MinecraftStateView> {
-  if (game?.running()) return statusView()
+export function listMinecraftVersionsView(): MinecraftVersionOptionView[] {
+  return KNOWN_VERSIONS.map((version) => ({
+    id: version.id,
+    label: version.label,
+    fixes: (version.fixes ?? []).map((fix) => ({
+      kind: fix.kind,
+      label: fix.label,
+      defaultEnabled: fix.defaultEnabled
+    })),
+    supportsMultiplayer: version.supportsMultiplayer ?? false
+  }))
+}
+
+export async function launchMinecraftView(
+  versionId: string,
+  options?: MinecraftLaunchOptionsView
+): Promise<MinecraftStateView> {
   lastError = null
+  if (game?.running()) {
+    lastError = 'A game session is already running; stop it before launching another one'
+    return toView()
+  }
+
   try {
     const version = getMinecraftVersion(versionId)
-    const report = await detectJavaRuntime()
-    const installation = report.selection.installation
-    if (!installation) {
-      throw new Error(`Java ${report.requiredMajor} is not available: ${report.selection.reason}`)
-    }
     const layout = resolveMinecraftLayout(repoRoot(), version)
-    game = await launchMinecraft({ javaExecutable: installation.executable, layout, version })
-    console.log(
-      `[minecraft] launched ${version.id} (pid ${game.pid}) with ${installation.raw} (${installation.architecture})`
-    )
+    const report = await detectJavaRuntime()
+    if (!report.selection.installation) {
+      lastError = report.selection.reason
+      return toView()
+    }
+
+    game = await launchMinecraft({
+      javaExecutable: report.selection.installation.executable,
+      layout,
+      version,
+      // The panel always sends its full checkbox state; an empty list means
+      // "all optional patches off", so it must not degrade to the registry
+      // default (undefined).
+      fixesEnabled: options?.fixesEnabled ?? undefined,
+      extraParameters: options?.extraParameters ?? undefined
+    })
+    game.onExit(() => {
+      // Keep the finished session around so the panel can show pid/exit code
+      // until the next launch.
+    })
   } catch (error) {
-    lastError = error instanceof Error ? error.message : String(error)
-    console.error('[minecraft] launch failed:', error)
     game = null
+    lastError =
+      error instanceof MinecraftLaunchError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error)
   }
-  return statusView()
+  return toView()
 }
 
 export function stopMinecraftView(): MinecraftStateView {
   game?.stop()
-  return statusView()
+  return toView()
 }
 
-export function minecraftStatusView(): MinecraftStateView {
-  return statusView()
+export function getMinecraftStatusView(): MinecraftStateView {
+  return toView()
 }
 
-/** Host shutdown must not orphan the game process. */
+/** Terminates the game when the host quits (Phase 1: game is a child process). */
 export function shutdownMinecraft(): void {
   game?.stop()
 }

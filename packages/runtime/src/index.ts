@@ -15,8 +15,15 @@ export { probeJavaExecutable, type ProbeResult } from './java/probe'
 export { javaMajorVersion, normaliseArchitecture, parseJavaVersion, parseVersionBanner } from './java/version'
 export { selectJavaInstallation } from './java/select'
 
-export type { MinecraftChannel, MinecraftVersion } from './minecraft/version'
-export { CLASSIC_C0_0_21A_01, KNOWN_VERSIONS, getMinecraftVersion } from './minecraft/version'
+export type { MinecraftChannel, MinecraftFix, MinecraftVersion } from './minecraft/version'
+export {
+  CLASSIC_C0_0_12A_03_200018,
+  CLASSIC_C0_0_15A_05311904,
+  CLASSIC_C0_0_21A_01,
+  INDEV_20100223,
+  KNOWN_VERSIONS,
+  getMinecraftVersion
+} from './minecraft/version'
 export type { MinecraftLayout } from './minecraft/layout'
 export {
   HOST_JAR_PATH,

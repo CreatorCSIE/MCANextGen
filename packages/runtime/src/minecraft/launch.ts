@@ -24,7 +24,7 @@ import path from 'node:path'
 import type { MinecraftLayout } from './layout'
 import { missingMinecraftAssets } from './layout'
 import { DEFAULT_GAME_JVM_ARGUMENTS } from './arguments'
-import type { MinecraftVersion } from './version'
+import type { MinecraftFix, MinecraftVersion } from './version'
 
 export interface MinecraftLaunchOptions {
   /** Absolute path of a probed Java 8 `java` executable. */
@@ -44,6 +44,20 @@ export interface MinecraftLaunchOptions {
    * (the ported java_arguments + fix_arguments, see arguments.ts).
    */
   jvmArguments?: readonly string[]
+  /** Forwarded for every stdout/stderr line of the game process (host logs, patches, crashes). */
+  onOutput?: (line: string) => void
+  /**
+   * Extra applet parameters merged over the version defaults — e.g. `server`
+   * and `port` make the 15a patch connect to a classic multiplayer server
+   * instead of starting singleplayer.
+   */
+  extraParameters?: Record<string, string>
+  /**
+   * Optional-feature switches for this launch. Omitted = the version
+   * registry's `defaultEnabled` set; provided = exactly these fixes run
+   * (the UI passes the checked list so users can toggle patches per launch).
+   */
+  fixesEnabled?: readonly MinecraftFix[]
 }
 
 export interface MinecraftExitInfo {
@@ -75,6 +89,17 @@ export class MinecraftLaunchError extends Error {
 
 const MAX_TAIL_LINES = 60
 
+/** Drop blank/whitespace-only UI inputs so absent fields behave as "unset". */
+function cleanParameters(
+  parameters: Record<string, string> | undefined
+): Record<string, string> {
+  const cleaned: Record<string, string> = {}
+  for (const [key, value] of Object.entries(parameters ?? {})) {
+    if (value.trim() !== '') cleaned[key] = value.trim()
+  }
+  return cleaned
+}
+
 /** Launch Minecraft; resolves once the Java process exists, not once the game window is up. */
 export async function launchMinecraft(options: MinecraftLaunchOptions): Promise<MinecraftGame> {
   const { javaExecutable, layout, version } = options
@@ -90,8 +115,16 @@ export async function launchMinecraft(options: MinecraftLaunchOptions): Promise<
   const parameters: Record<string, string> = {
     username: 'Player',
     sessionid: String(Math.floor(Math.random() * 1_000_000_000)),
-    ...version.parameters
+    ...version.parameters,
+    ...cleanParameters(options.extraParameters)
   }
+  // Same parameter names the browser-era <embed> used, so the host and any
+  // game-side readers agree on the switch (see version.ts MinecraftFix).
+  const fixes = version.fixes ?? []
+  const enabledFixes = options.fixesEnabled
+    ? fixes.filter((fix) => options.fixesEnabled?.includes(fix.kind))
+    : fixes.filter((fix) => fix.defaultEnabled)
+  for (const fix of enabledFixes) parameters[fix.kind] = 'true'
   const paramsDir = mkdtempSync(path.join(tmpdir(), 'mcanextgen-'))
   const paramsFile = path.join(paramsDir, 'params.json')
   writeFileSync(paramsFile, JSON.stringify(parameters), 'utf8')
@@ -125,6 +158,7 @@ export async function launchMinecraft(options: MinecraftLaunchOptions): Promise<
       if (line.trim() === '') continue
       tail.push(line)
       if (tail.length > MAX_TAIL_LINES) tail.shift()
+      options.onOutput?.(line)
     }
   }
   child.stdout?.on('data', (chunk: Buffer) => pushTail(chunk))

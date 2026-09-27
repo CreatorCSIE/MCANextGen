@@ -14,7 +14,9 @@ export const IPC = {
   /** Asks the running game process to terminate. */
   MINECRAFT_STOP: 'minecraft:stop',
   /** Current state of the game process (also used for polling). */
-  MINECRAFT_STATUS: 'minecraft:status'
+  MINECRAFT_STATUS: 'minecraft:status',
+  /** Registered versions for the picker, straight from the runtime registry. */
+  MINECRAFT_LIST_VERSIONS: 'minecraft:list-versions'
 } as const
 
 export interface HostInfo {
@@ -66,10 +68,38 @@ export interface MinecraftStateView {
   error: string | null
 }
 
+/** Mirrors MinecraftFix in the runtime registry (kept as a literal so the renderer stays dependency-free). */
+export type MinecraftFixKind = 'dpi_fix' | '15a_server_patch'
+
+/** An optional host-side patch the launch panel can toggle. */
+export interface MinecraftFixView {
+  kind: MinecraftFixKind
+  label: string
+  defaultEnabled: boolean
+}
+
+export interface MinecraftVersionOptionView {
+  id: string
+  label: string
+  /** Optional features declared for this version (empty when none apply). */
+  fixes: MinecraftFixView[]
+  /** True when the client natively reads `server`/`port` applet parameters. */
+  supportsMultiplayer: boolean
+}
+
+/** Per-launch switches the panel sends; omitted fields keep registry defaults. */
+export interface MinecraftLaunchOptionsView {
+  /** Exactly the fixes to run for this launch (checkbox state). */
+  fixesEnabled?: MinecraftFixKind[]
+  /** `server`/`port` from the connection fields; blank entries are dropped. */
+  extraParameters?: Record<string, string>
+}
+
 export interface HostApi {
   getInfo(): Promise<HostInfo>
   detectJava(): Promise<JavaStatusView>
-  launchMinecraft(versionId: string): Promise<MinecraftStateView>
+  launchMinecraft(versionId: string, options?: MinecraftLaunchOptionsView): Promise<MinecraftStateView>
   stopMinecraft(): Promise<MinecraftStateView>
   getMinecraftStatus(): Promise<MinecraftStateView>
+  listMinecraftVersions(): Promise<MinecraftVersionOptionView[]>
 }

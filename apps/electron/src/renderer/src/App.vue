@@ -1,6 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue'
-import type { HostInfo, JavaStatusView, MinecraftStateView } from '@shared/ipc'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import type {
+  HostInfo,
+  JavaStatusView,
+  MinecraftFixView,
+  MinecraftStateView,
+  MinecraftVersionOptionView
+} from '@shared/ipc'
 
 const info = ref<HostInfo | null>(null)
 const java = ref<JavaStatusView | null>(null)
@@ -22,7 +28,26 @@ async function detectJava(): Promise<void> {
 const game = ref<MinecraftStateView | null>(null)
 const gameBusy = ref(false)
 const gameVersion = ref('c0.0.21a_01')
+const gameVersions = ref<MinecraftVersionOptionView[]>([])
 let gameTimer: number | null = null
+
+/** Checkbox state for the selected version's optional features (registry defaults on switch). */
+const fixToggles = ref<Array<MinecraftFixView & { enabled: boolean }>>([])
+/** Classic server connection fields; only meaningful when the version supports them. */
+const server = ref('')
+const port = ref('')
+
+const selectedVersion = computed(
+  () => gameVersions.value.find((option) => option.id === gameVersion.value) ?? null
+)
+
+watch(
+  selectedVersion,
+  (version) => {
+    fixToggles.value = (version?.fixes ?? []).map((fix) => ({ ...fix, enabled: fix.defaultEnabled }))
+  },
+  { immediate: true }
+)
 
 function stopGamePolling(): void {
   if (gameTimer !== null) {
@@ -42,7 +67,13 @@ function pollGameStatus(): void {
 async function launchGame(): Promise<void> {
   gameBusy.value = true
   try {
-    game.value = await window.mcanextgen.launchMinecraft(gameVersion.value)
+    const extraParameters: Record<string, string> = {}
+    if (server.value.trim() !== '') extraParameters.server = server.value.trim()
+    if (port.value.trim() !== '') extraParameters.port = port.value.trim()
+    game.value = await window.mcanextgen.launchMinecraft(gameVersion.value, {
+      fixesEnabled: fixToggles.value.filter((fix) => fix.enabled).map((fix) => fix.kind),
+      extraParameters
+    })
     if (game.value.running) pollGameStatus()
   } catch (err) {
     game.value = {
@@ -71,6 +102,7 @@ async function stopGame(): Promise<void> {
 onMounted(async () => {
   try {
     info.value = await window.mcanextgen.getInfo()
+    gameVersions.value = await window.mcanextgen.listMinecraftVersions()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   }
@@ -149,7 +181,9 @@ onBeforeUnmount(stopGamePolling)
         </span>
         <span class="host__spacer" />
         <select v-model="gameVersion" class="runtime__button" :disabled="game?.running || gameBusy">
-          <option value="c0.0.21a_01">Classic 0.0.21a_01</option>
+          <option v-for="option in gameVersions" :key="option.id" :value="option.id">
+            {{ option.label }}
+          </option>
         </select>
         <button
           v-if="!game?.running"
@@ -167,6 +201,36 @@ onBeforeUnmount(stopGamePolling)
         >
           Stop
         </button>
+      </div>
+
+      <div class="runtime__options">
+        <label
+          v-for="fix in fixToggles"
+          :key="fix.kind"
+          class="runtime__check"
+          :class="{ 'is-disabled': game?.running }"
+        >
+          <input v-model="fix.enabled" type="checkbox" :disabled="game?.running || gameBusy" />
+          {{ fix.label }}
+        </label>
+        <span class="host__spacer" />
+        <input
+          v-model="server"
+          class="runtime__input"
+          placeholder="server"
+          :disabled="!selectedVersion?.supportsMultiplayer || game?.running || gameBusy"
+          :title="
+            selectedVersion?.supportsMultiplayer
+              ? 'Leave empty for singleplayer'
+              : 'This version does not read server/port applet parameters'
+          "
+        />
+        <input
+          v-model="port"
+          class="runtime__input runtime__input--port"
+          placeholder="port"
+          :disabled="!selectedVersion?.supportsMultiplayer || game?.running || gameBusy"
+        />
       </div>
     </section>
 
@@ -293,6 +357,44 @@ onBeforeUnmount(stopGamePolling)
 .runtime__button:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.runtime__options {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.runtime__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--host-muted);
+  cursor: pointer;
+}
+
+.runtime__check.is-disabled {
+  cursor: default;
+}
+
+.runtime__input {
+  padding: 3px 8px;
+  border: 1px solid var(--host-border);
+  border-radius: 4px;
+  background: var(--host-panel);
+  color: var(--host-text);
+  font: inherit;
+  width: 180px;
+}
+
+.runtime__input--port {
+  width: 72px;
+}
+
+.runtime__input:disabled {
+  opacity: 0.5;
 }
 
 .runtime__list {

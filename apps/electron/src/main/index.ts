@@ -1,10 +1,11 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath, URL } from 'node:url'
-import { IPC, type HostInfo } from '@shared/ipc'
+import { IPC, type HostInfo, type MinecraftLaunchOptionsView } from '@shared/ipc'
 import { detectJava } from './java'
 import {
+  getMinecraftStatusView,
   launchMinecraftView,
-  minecraftStatusView,
+  listMinecraftVersionsView,
   shutdownMinecraft,
   stopMinecraftView
 } from './minecraft'
@@ -55,11 +56,14 @@ function registerIpc(): void {
   })
 
   ipcMain.handle(IPC.JAVA_DETECT, () => detectJava())
-  ipcMain.handle(IPC.MINECRAFT_LAUNCH, (_event, versionId: string) =>
-    launchMinecraftView(versionId)
+  ipcMain.handle(
+    IPC.MINECRAFT_LAUNCH,
+    (_event, versionId: string, options?: MinecraftLaunchOptionsView) =>
+      launchMinecraftView(versionId, options)
   )
   ipcMain.handle(IPC.MINECRAFT_STOP, () => stopMinecraftView())
-  ipcMain.handle(IPC.MINECRAFT_STATUS, () => minecraftStatusView())
+  ipcMain.handle(IPC.MINECRAFT_STATUS, () => getMinecraftStatusView())
+  ipcMain.handle(IPC.MINECRAFT_LIST_VERSIONS, () => listMinecraftVersionsView())
 }
 
 app.whenReady().then(() => {

@@ -1,0 +1,22 @@
+# 统一换行符：仓库内文本一律以 LF 存储（text=auto 归一化，全平台一致）。
+# eol=lf 只约束「检出」：Linux/macOS 原生即 LF，对它俩本条是 no-op、不发生任何转换；
+# 它针对的是 Windows —— 以规则形式抵消各贡献者本地 core.autocrlf=true 的 CRLF 转换，
+# 使检出与存储一致、diff 无换行噪音（Phase 9 Linux 移植克隆后行为零变化）。
+* text=auto eol=lf
+
+# 二进制资产：永不换行符转换
+*.jar binary
+*.class binary
+*.dll binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+
+# Windows 批处理必须是 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
