@@ -34,7 +34,7 @@ export {
 export type { MinecraftExitInfo, MinecraftGame, MinecraftLaunchOptions } from './minecraft/launch'
 export { MinecraftLaunchError, launchMinecraft } from './minecraft/launch'
 export type { AppletClassList } from './minecraft/applets'
-export { AppletScanError, listAppletClasses } from './minecraft/applets'
+export { listAppletClasses } from './minecraft/applets'
 export {
   DEFAULT_FIX_ARGUMENTS,
   DEFAULT_GAME_JVM_ARGUMENTS,

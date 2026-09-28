@@ -32,8 +32,10 @@ import java.util.jar.JarFile;
 public final class MinecraftHost {
 
     public static void main(String[] args) throws Exception {
-        // runtime 层的入口类枚举模式（--list-applets）：headless 扫描 jar，
-        // 不创建任何窗口，输出 "MCANEXTGEN_APPLET <类名>" 供 TS 侧解析。
+        // 入口类枚举的 JVM 侧参考实现（--list-applets）。runtime 层现在改用
+        // Node 侧离线解析 class 文件（packages/runtime/src/minecraft/applets.ts，
+        // 借鉴 DECRAFT 的 JavaClassReader），本模式保留作兜底与交叉验证：
+        // headless 扫描 jar，不创建任何窗口，输出 "MCANEXTGEN_APPLET <类名>"。
         if (args.length > 0 && "--list-applets".equals(args[0])) {
             listAppletClasses();
             return;

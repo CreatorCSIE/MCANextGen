@@ -175,7 +175,7 @@ export const INDEV_20100223: MinecraftVersion = {
  * First infdev test version, and the one that proves out the entry-class
  * dropdown: the jar ships *two* launchable applets — the regular
  * `net.minecraft.client.MinecraftApplet` and the Infinite Map Visualizer
- * `net.minecraft.isom.IsomPreviewApplet` — which the headless scan (see
+ * `net.minecraft.isom.IsomPreviewApplet` — which the offline scan (see
  * applets.ts) enumerates so the launch panel can pick between them.
  * Byte-identical (SHA256 E095146F…) to the `inf-20100617-2` re-upload, so the
  * entry-class verification done against `-2` applies here directly.

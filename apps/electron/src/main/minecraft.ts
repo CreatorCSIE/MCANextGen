@@ -63,12 +63,18 @@ export function listMinecraftVersionsView(): MinecraftVersionOptionView[] {
 }
 
 /**
- * Headless scan of the version's client jar for launchable Applet entry
+ * Offline scan of the version's client jar for launchable Applet entry
  * classes (infdev 20100617 carries the isom preview next to the regular
- * client). Failures degrade to "default only" so the panel never blocks on
- * an exotic jar.
+ * client). The scan parses class files in-process (see runtime applets.ts):
+ * no JVM, no Java dependency. Failures degrade to "default only" so the
+ * panel never blocks on an exotic or missing jar. Successful results are
+ * memoized per version to skip re-reading unchanged jars.
  */
+const appletScanCache = new Map<string, MinecraftAppletList>()
+
 export async function listMinecraftAppletsView(versionId: string): Promise<MinecraftAppletList> {
+  const cached = appletScanCache.get(versionId)
+  if (cached) return cached
   const fallback = (error: string): MinecraftAppletList => ({
     appletClasses: [],
     defaultAppletClass: getMinecraftVersion(versionId).appletClass,
@@ -77,11 +83,14 @@ export async function listMinecraftAppletsView(versionId: string): Promise<Minec
   try {
     const version = getMinecraftVersion(versionId)
     const layout = resolveMinecraftLayout(repoRoot(), version)
-    const report = await detectJavaRuntime()
-    const java = report.selection.installation
-    if (!java) return fallback(report.selection.reason ?? '未找到可用的 Java 8 运行时')
-    const scan = await listAppletClasses(java.executable, layout)
-    return { appletClasses: scan.appletClasses, defaultAppletClass: version.appletClass, error: null }
+    const scan = listAppletClasses(layout)
+    const result: MinecraftAppletList = {
+      appletClasses: scan.appletClasses,
+      defaultAppletClass: version.appletClass,
+      error: null
+    }
+    appletScanCache.set(versionId, result)
+    return result
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return fallback(message)

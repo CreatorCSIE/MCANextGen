@@ -39,12 +39,17 @@ const port = ref('')
 
 /**
  * Applet 入口类（临时下拉方案，正式 UI 设计时再重做）：
- * jar 扫描发现 >1 个入口才显示（infdev 20100617 = 常规客户端 + isom 预览），
- * 单入口/扫描失败都退回注册表默认值。
+ * 无差别启用——即使 jar 只有一个入口也显示，让用户始终能看到将要启动的
+ * 真实入口类；扫描失败/未返回时回退为仅注册表默认入口一项。
+ * 选项只显示简名（提交值仍是全限定类名），避免撑宽选项行。
  */
 const appletChoices = ref<string[]>([])
 const appletClass = ref('')
 let appletScanSeq = 0
+
+function appletSimpleName(className: string): string {
+  return className.slice(className.lastIndexOf('.') + 1)
+}
 
 const selectedVersion = computed(
   () => gameVersions.value.find((option) => option.id === gameVersion.value) ?? null
@@ -59,9 +64,10 @@ async function refreshAppletChoices(versionId: string): Promise<void> {
     const scan = await window.mcanextgen.listMinecraftApplets(versionId)
     if (seq !== appletScanSeq) return
     appletClass.value = scan.defaultAppletClass
-    appletChoices.value = scan.appletClasses.length > 1 ? scan.appletClasses : []
+    appletChoices.value =
+      scan.appletClasses.length > 0 ? scan.appletClasses : [scan.defaultAppletClass]
   } catch {
-    // 枚举失败不阻塞启动：保持注册表默认入口，下拉不出现
+    // 枚举失败不阻塞启动：保持注册表默认入口
   }
 }
 
@@ -239,8 +245,8 @@ onBeforeUnmount(stopGamePolling)
           <input v-model="fix.enabled" type="checkbox" :disabled="game?.running || gameBusy" />
           {{ fix.label }}
         </label>
-        <!-- 临时下拉：jar 内发现多个 Applet 入口（如 infdev 20100617 的 isom 预览）才出现 -->
-        <label v-if="appletChoices.length > 1" class="runtime__check">
+        <!-- 临时入口下拉：无差别启用，单入口 jar 也展示将要启动的真实入口类 -->
+        <label v-if="appletChoices.length > 0" class="runtime__check">
           Applet 入口
           <select
             v-model="appletClass"
@@ -248,7 +254,7 @@ onBeforeUnmount(stopGamePolling)
             :disabled="game?.running || gameBusy"
           >
             <option v-for="entry in appletChoices" :key="entry" :value="entry">
-              {{ entry }}
+              {{ appletSimpleName(entry) }}
             </option>
           </select>
         </label>

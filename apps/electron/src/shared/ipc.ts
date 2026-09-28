@@ -17,7 +17,7 @@ export const IPC = {
   MINECRAFT_STATUS: 'minecraft:status',
   /** Registered versions for the picker, straight from the runtime registry. */
   MINECRAFT_LIST_VERSIONS: 'minecraft:list-versions',
-  /** Enumerates the Applet entry classes inside a version's client jar (headless scan). */
+  /** Enumerates the Applet entry classes inside a version's client jar (offline scan). */
   MINECRAFT_LIST_APPLETS: 'minecraft:list-applets'
 } as const
 
@@ -99,12 +99,13 @@ export interface MinecraftLaunchOptionsView {
   appletClass?: string
 }
 
-/** Result of the headless `--list-applets` scan for one version's jar. */
+/** Result of the offline class-file scan for one version's jar. */
 export interface MinecraftAppletList {
   /**
-   * Launchable Applet entry classes found in the jar, sorted. One entry means
-   * nothing to choose and the panel hides the dropdown; several (infdev
-   * 20100617: regular client + `net.minecraft.isom.IsomPreviewApplet`) enable it.
+   * Launchable Applet entry classes found in the jar, sorted (infdev 20100617:
+   * regular client + `net.minecraft.isom.IsomPreviewApplet`). The panel's
+   * entry dropdown always shows these — even a single entry is surfaced so
+   * the user can see which class will actually launch.
    */
   appletClasses: string[]
   /** The registry default the dropdown should preselect. */

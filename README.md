@@ -1,6 +1,6 @@
 > [!IMPORTANT]
-> **项目状态提示**：本项目处于**早期开发阶段**。目前已完成工程脚手架（Phase 0）、**Java 运行时自动探测**与 **Classic 核心启动**（Phase 1：游戏以独立 Java 8 进程运行、弹出独立窗口），并已注册 0.0.21a_01 与四个测试历史版本（含双入口的 Infdev 20100617-1531）、移植 `dpi_fix` / `15a_server_patch` 两项补丁（均已实测生效）、实现 headless 的 Applet 入口枚举；**原生窗口捕获与嵌入（Phase 2/3/4）尚未实现**，游戏窗口暂时游离在宿主之外。
-> *Status Notice: the scaffolding, the Java runtime probe and the core launch path (Classic 0.0.21a_01 plus four registered historical test builds—including the dual-entry Infdev 20100617-1531—, the ported `dpi_fix` / `15a_server_patch` optional fixes verified live, and headless Applet entry enumeration) are done; capturing and embedding the game's native window into the host is **not implemented yet**.*
+> **项目状态提示**：本项目处于**早期开发阶段**。目前已完成工程脚手架（Phase 0）、**Java 运行时自动探测**与 **Classic 核心启动**（Phase 1：游戏以独立 Java 8 进程运行、弹出独立窗口），并已注册 0.0.21a_01 与四个测试历史版本（含双入口的 Infdev 20100617-1531）、移植 `dpi_fix` / `15a_server_patch` 两项补丁（均已实测生效）、实现离线的 Applet 入口枚举（纯字节码解析、不起 JVM）；**原生窗口捕获与嵌入（Phase 2/3/4）尚未实现**，游戏窗口暂时游离在宿主之外。
+> *Status Notice: the scaffolding, the Java runtime probe and the core launch path (Classic 0.0.21a_01 plus four registered historical test builds—including the dual-entry Infdev 20100617-1531—, the ported `dpi_fix` / `15a_server_patch` optional fixes verified live, and offline JVM-free Applet entry enumeration) are done; capturing and embedding the game's native window into the host is **not implemented yet**.*
 
 # MCANextGen - 旧版 Minecraft Applet 桌面宿主 (Legacy Minecraft Applet Desktop Host)
 
@@ -29,7 +29,7 @@ Browser                            MCANextGen Host
 - **旧版客户端核心启动（已可用，Phase 1）**：`runtime/minecraft-host` 以自制的 `AppletStub` 容器直接驱动原始 `com.mojang.minecraft.MinecraftApplet`（不含 AppletLoader 的下载/签名机制），配合随仓库分发的 LWJGL 2.9.3 与 natives，把 Classic 0.0.21a_01 作为独立 Java 8 进程拉起；游戏窗口客户区精确等于设定分辨率（`setPreferredSize + pack()`）。缺 jar 时宿主报告期望的完整路径，Stop / 退出宿主都会收掉游戏进程。
 - **移植参考项目的 JVM 参数组（已可用）**：`java_arguments` + `fix_arguments`（MCAHTML 与 MCAJNLP 共用同一套）已接入 `packages/runtime/src/minecraft/arguments.ts`——含 Betacraft 兼容代理（历史客户端硬编码的 `www.minecraft.net` HTTP 流量重定向）、渲染修复五连（`noddraw` / `noerasebackground` / `d3d` / `opengl` / `pmoffscreen`）、`useLegacyMergeSort`（经典版比较器不满足 TimSort 契约）与内存上限，调用方可整体覆写。
 - **AppletLoader 补丁作为按版本声明的可选功能（已可用）**：LWJGL fork 的两项修复移植到 `runtime/minecraft-host`（`Patches.java`，纯反射实现、与游戏类零编译期耦合）——`dpi_fix` 破除 pre-0.0.12a_03 硬编码的 640x480（视口与 framebuffer 的尺寸来源收敛在游戏 `a`/`b` 字段，`run()` 再据此 `setDisplayMode`；实测 640x480 → 854x480，右侧黑边消失）；`15a_server_patch` 跳过 0.0.15a 对已死硬编码地址的数秒连接探测黑屏（反射组装替代原生 `init()`，给出 server/port 则直连）。按 MCAHTML/MCAJNLP 的栏位规则在版本注册表中声明：`classicpre12a` 仅出 dpi_fix 复选框、`classic15a` 仅出 15a 补丁复选框、`classicmp`（原生 server/port 时代）不显示任何复选框；启动面板按注册表动态生成勾选框，支持逐次启动开关。
-- **Applet 入口枚举与 isom 预览入口（已可用）**：宿主机用独立的 headless JVM 枚举所选 jar 内全部可启动的 Applet 入口类（真实 `Applet.isAssignableFrom` 判定、只 load 不 initialize，全程不会出现任何窗口）。发现多个入口时（Infdev 20100617 的 jar 在常规客户端之外还带 `net.minecraft.isom.IsomPreviewApplet`），启动面板出现一个临时的入口下拉（正式 UI 设计阶段会重做），所选入口随启动透传给 Java 宿主；isom 的窗口标题写为其真名 **Infinite Map Visualizer**，不与 Minecraft 共用。
+- **Applet 入口枚举与 isom 预览入口（已可用）**：runtime 层**离线**枚举所选 jar 内全部可启动的 Applet 入口类——在 Node 侧直接解析 class 文件的常量池/超类链/访问标志/构造器（借鉴 DECRAFT 的 `JavaClassReader`，与 JVM 内 `isAssignableFrom` 读同一份权威数据），全程不起 JVM、不出现任何窗口，甚至不要求机器上装了 Java。启动面板有一个常驻的临时入口下拉（正式 UI 设计阶段会重做），始终展示将要启动的真实入口类：单入口 jar 只有一项，Infdev 20100617 的 jar 则额外带 `net.minecraft.isom.IsomPreviewApplet` 可选；所选入口随启动透传给 Java 宿主；isom 的窗口标题写为其真名 **Infinite Map Visualizer**，不与 Minecraft 共用。
 - **规划中（按 plan.md 阶段推进）**：原生窗口句柄捕获、Windows 子窗口嵌入 PoC 与嵌入窗口管理、Applet 风格 UI、更多历史版本、Linux 支持、Tauri Edition。
 
 ---
@@ -47,7 +47,7 @@ Browser                            MCANextGen Host
 - **Beta JAR**：放置于 `assets/minecraft/beta/`
 - **Release JAR**：放置于 `assets/minecraft/release/`
 
-> **为什么没有 isom 目录**：Infinite Map Visualizer 不是独立版本——infdev 20100617 的 jar 里同时含 `net.minecraft.client.MinecraftApplet` 与 `net.minecraft.isom.IsomPreviewApplet` 两个入口类。宿主会在后台（headless、无窗口）扫描所选 jar 并枚举全部可启动的 Applet 入口，MCAHTML/MCAJNLP 手工维护的 isom 渠道在这里只是启动面板里的一个入口选择（选它启动时窗口标题显示为 Infinite Map Visualizer）。
+> **为什么没有 isom 目录**：Infinite Map Visualizer 不是独立版本——infdev 20100617 的 jar 里同时含 `net.minecraft.client.MinecraftApplet` 与 `net.minecraft.isom.IsomPreviewApplet` 两个入口类。宿主会在后台**离线解析字节码**（不起 JVM、全程无窗口）枚举所选 jar 里全部可启动的 Applet 入口，MCAHTML/MCAJNLP 手工维护的 isom 渠道在这里只是启动面板里的一个入口选择（选它启动时窗口标题显示为 Infinite Map Visualizer）。
 
 > **与参考项目的差异**：这里取代了 MCAHTML 与 MCAJNLP 使用的 `bin/<channel>/` 布局；channel 子目录名保持完全一致，因此从两个参考项目搬运 jar 时只需换一个父目录。
 >
