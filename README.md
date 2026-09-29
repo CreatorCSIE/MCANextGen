@@ -1,6 +1,6 @@
 > [!IMPORTANT]
-> **项目状态提示**：本项目处于**早期开发阶段**。目前已完成工程脚手架（Phase 0）、**Java 运行时自动探测**与 **Classic 核心启动**（Phase 1：游戏以独立 Java 8 进程运行、弹出独立窗口），并已注册 0.0.21a_01 与四个测试历史版本（含双入口的 Infdev 20100617-1531）、移植 `dpi_fix` / `15a_server_patch` 两项补丁（均已实测生效）、实现离线的 Applet 入口枚举（纯字节码解析、不起 JVM）；**原生窗口捕获与嵌入（Phase 2/3/4）尚未实现**，游戏窗口暂时游离在宿主之外。
-> *Status Notice: the scaffolding, the Java runtime probe and the core launch path (Classic 0.0.21a_01 plus four registered historical test builds—including the dual-entry Infdev 20100617-1531—, the ported `dpi_fix` / `15a_server_patch` optional fixes verified live, and offline JVM-free Applet entry enumeration) are done; capturing and embedding the game's native window into the host is **not implemented yet**.*
+> **项目状态提示**：本项目处于**早期开发阶段**。已完成：工程脚手架（Phase 0）、**Java 运行时自动探测**、**Classic 核心启动**（Phase 1）、**原生窗口句柄捕获**（Phase 2）与 **Windows 子窗口嵌入（Phase 3）**——游戏窗口现已作为原生子窗口嵌入宿主窗口内的固定槽位，Classic 0.0.21a_01 的渲染、键盘/鼠标输入、焦点转发与 Stop/关窗拆卸均已实机验证；另有 `dpi_fix` / `15a_server_patch` 两项补丁（实测生效）、离线的 Applet 入口枚举与**能力探测**（纯字节码解析、不起 JVM）。**尚未实现**：嵌入窗口管理（Phase 4：resizable 版本的动态缩放同步与 F11 重映射）及其后的正式 UI 与更多版本；当前 fixed 版本以原生分辨率在槽位居中显示、不做拉伸。
+> *Status Notice: the scaffolding, the Java runtime probe, the core launch path (Phase 1), native window-handle capture (Phase 2) and Windows child-window embedding (Phase 3) are done — the game's native window is now reparented into a slot inside the host window, with rendering, keyboard/mouse input, focus forwarding and clean teardown live-verified on Classic 0.0.21a_01; the ported `dpi_fix` / `15a_server_patch` fixes, offline JVM-free Applet entry enumeration and the capability probe are all in place. Embedded window management (Phase 4: resize synchronization for resizable builds and F11 remapping) is **not implemented yet**.*
 
 # MCANextGen - 旧版 Minecraft Applet 桌面宿主 (Legacy Minecraft Applet Desktop Host)
 
@@ -26,11 +26,15 @@ Browser                            MCANextGen Host
 - **Java 运行时自动探测（已可用）**：按 **注册表 → 常见安装目录 → `JAVA_HOME` / `JDK_HOME` → `PATH`** 的优先级收集候选，再对每个候选**实测执行** `java -XshowSettings:properties -version` 读取真实的 `java.version`、`os.arch`、`java.home`，自动合并 JDK 与其自带 JRE 的重复项，**优先选择 64 位 Java 8**，仅在没有任何 64 位可用时回退 32 位。
 - **探测结果可视化**：宿主窗口内直接展示候选列表（版本、架构、发现来源、是否被选中）与被拒绝原因、探测耗时，避免「点了没反应」式黑盒失败。
 - **安全的渲染层边界**：主进程 / preload / 渲染进程之间只有单一 IPC 契约文件（`apps/electron/src/shared/ipc.ts`），渲染进程通过 `contextBridge` 调用，完全不接触 Node API。
-- **旧版客户端核心启动（已可用，Phase 1）**：`runtime/minecraft-host` 以自制的 `AppletStub` 容器直接驱动原始 `com.mojang.minecraft.MinecraftApplet`（不含 AppletLoader 的下载/签名机制），配合随仓库分发的 LWJGL 2.9.3 与 natives，把 Classic 0.0.21a_01 作为独立 Java 8 进程拉起；游戏窗口客户区精确等于设定分辨率（`setPreferredSize + pack()`）。缺 jar 时宿主报告期望的完整路径，Stop / 退出宿主都会收掉游戏进程。
+- **旧版客户端核心启动（已可用，Phase 1）**：`runtime/minecraft-host` 以自制的 `AppletStub` 容器直接驱动原始 `com.mojang.minecraft.MinecraftApplet`（不含 AppletLoader 的下载/签名机制），配合随仓库分发的 LWJGL 2.9.3 与 natives，把 Classic 0.0.21a_01 拉起为独立 Java 8 进程（该进程的游戏窗口随后由宿主嵌入，见 Phase 2/3 条目）；游戏窗口客户区精确等于设定分辨率（`setPreferredSize + pack()`）。缺 jar 时宿主报告期望的完整路径，Stop / 退出宿主都会收掉游戏进程。
 - **移植参考项目的 JVM 参数组（已可用）**：`java_arguments` + `fix_arguments`（MCAHTML 与 MCAJNLP 共用同一套）已接入 `packages/runtime/src/minecraft/arguments.ts`——含 Betacraft 兼容代理（历史客户端硬编码的 `www.minecraft.net` HTTP 流量重定向）、渲染修复五连（`noddraw` / `noerasebackground` / `d3d` / `opengl` / `pmoffscreen`）、`useLegacyMergeSort`（经典版比较器不满足 TimSort 契约）与内存上限，调用方可整体覆写。
 - **AppletLoader 补丁作为按版本声明的可选功能（已可用）**：LWJGL fork 的两项修复移植到 `runtime/minecraft-host`（`Patches.java`，纯反射实现、与游戏类零编译期耦合）——`dpi_fix` 破除 pre-0.0.12a_03 硬编码的 640x480（视口与 framebuffer 的尺寸来源收敛在游戏 `a`/`b` 字段，`run()` 再据此 `setDisplayMode`；实测 640x480 → 854x480，右侧黑边消失）；`15a_server_patch` 跳过 0.0.15a 对已死硬编码地址的数秒连接探测黑屏（反射组装替代原生 `init()`，给出 server/port 则直连）。按 MCAHTML/MCAJNLP 的栏位规则在版本注册表中声明：`classicpre12a` 仅出 dpi_fix 复选框、`classic15a` 仅出 15a 补丁复选框、`classicmp`（原生 server/port 时代）不显示任何复选框；启动面板按注册表动态生成勾选框，支持逐次启动开关。
 - **Applet 入口枚举与 isom 预览入口（已可用）**：runtime 层**离线**枚举所选 jar 内全部可启动的 Applet 入口类——在 Node 侧直接解析 class 文件的常量池/超类链/访问标志/构造器（借鉴 DECRAFT 的 `JavaClassReader`，与 JVM 内 `isAssignableFrom` 读同一份权威数据），全程不起 JVM、不出现任何窗口，甚至不要求机器上装了 Java。启动面板有一个常驻的临时入口下拉（正式 UI 设计阶段会重做），始终展示将要启动的真实入口类：单入口 jar 只有一项，Infdev 20100617 的 jar 则额外带 `net.minecraft.isom.IsomPreviewApplet` 可选；所选入口随启动透传给 Java 宿主；isom 的窗口标题写为其真名 **Infinite Map Visualizer**，不与 Minecraft 共用。
-- **规划中（按 plan.md 阶段推进）**：原生窗口句柄捕获、Windows 子窗口嵌入 PoC 与嵌入窗口管理、Applet 风格 UI、更多历史版本、Linux 支持、Tauri Edition。
+- **原生窗口捕获（已可用，Phase 2）**：`@mcanextgen/native-win32` 以 koffi 直绑 user32/kernel32（懒加载、非 Windows 平台可安全 import），按**属主进程 + 窗口类双锚点**（`SunAwtFrame` / `LWJGL`）识别游戏窗口、不依赖窗口标题；`GameWindowTracker` 以 500ms 轮询上报窗口创建/销毁，并带「存活窗口期间不被顶替」护栏——实测搜狗 IME 会向 java 进程注入可见顶层 `SoPY_Status`，真窗嵌入变 WS_CHILD 后从 `EnumWindows` 消失时曾遭顶替。跨进程 SetParent 会**隐式 attach 输入队列**，因此外窗文本一律只经 `SendMessageTimeoutW(SMTO_ABORTIFHUNG)` 读取：裸 `GetWindowText` 是同步跨进程 send，实测曾与 Java 线程的激活流量对撞、冻结整个宿主。
+- **Windows 子窗口嵌入（已可用，Phase 3）**：游戏窗不直接挂进 Electron 顶层 HWND（那是 Chromium 的资产，会就 z-order 与命中测试打架），中间垫一层 koffi 自绘的 `WS_CHILD` 裁剪容器；游戏窗在嵌入时刻原生剥装饰、转 `WS_CHILD` 挂进裁剪窗，由容器客户区布局与裁剪。fixed 版本以原生分辨率在 854×480 CSS 槽位居中显示（Windows 无法缩放子窗口内容，拉伸留给 resizable 策略），letterbox 背景即 DOM 本身。实测 Classic 0.0.21a_01 槽内渲染与输入正常（617 fps）。三个实测定案的硬依赖：宿主全局 `--disable-direct-composition`（否则 Chromium 的 DComp 视觉树无视 z-order 盖死一切原生子窗）；frame 必须**带装饰创建、原生剥除**（Java 侧 undecorated 会破坏 LWJGL2 parented 模式）；嵌入前屏外停放、嵌入后落位，实现零标题栏闪现（Java watchdog 与原生 `bringWindowOnScreen` 双兜底，拆卸时同样先停外再脱父、零残留闪现）。
+- **Applet 时代死锁消除 + 宿主焦点转发（已可用）**：「失焦后点 Back to game 冻结」的 Applet 通病在此复现，被三份间隔 3 分钟的 jstack 抓成现行——三方 AWT 死锁（游戏线程持 AWTTreeLock 逐帧进 AWT native ↔ EDT 持 AWT_LOCK 等 Win32 SetFocus ↔ AWT-Windows）。宿主以 `protectAppletMouseMode` 反射翻掉游戏的 applet 鼠标模式标志、把鼠标切到 LWJGL 原生捕获分支（与 Betacraft v1 wrapper 的 Linux mouse fix 同款手法），死锁环失去一边；随之而来的是嵌入场景下 LWJGL 子窗拿不到 Win32 键盘焦点的输入缺口——由宿主**焦点转发**补齐：无消息枚举子窗锁定 `LWJGL` 焦点目标，`AttachThreadInput` + `SetFocus` 跨线程边界送达（触发点：`BrowserWindow focus` 与渲染层非交互区点击转发）；`blur` 侧对称地 `SetFocus(NULL)` 让游戏收到真实 WM_KILLFOCUS（弹暂停菜单、释放鼠标捕获）。已知残留：焦点住在 attach 队列里时 Chromium 的 `blur` 事件不保证触发，Alt+Tab 后游戏可能短暂保持聚焦（视觉级，输入正确性优先，详见 plan.md 风险登记 #3）。
+- **能力探测（已可用，纯离线）**：与入口枚举同一套 jar 内字节码解析，判定每个入口类的 **`resizable`**（游戏主循环是否逐帧轮询 canvas 尺寸）与 **`supportsFullscreen`**（F11 按键检查与全屏 API 引用必须共现）——嵌入策略由字节码证据决定而非年代猜测；锚点全部带 owner/邻接限定（owner 盲的 `getWidth()I` 会误中 Classic 的 `DisplayMode.getWidth`），6 个已注册 entry 的判定与 javap 地面真值逐行对齐。
+- **规划中（按 plan.md 阶段推进）**：嵌入窗口管理（Phase 4：resizable 版本宿主缩放同步、F11 重映射、最小尺寸约束）、Applet 风格 UI、更多历史版本、Linux 支持、Tauri Edition。
 
 ---
 
@@ -105,7 +109,7 @@ pnpm preview
 pnpm typecheck
 ```
 
-> **CI（临时最简闸门）**：上述 `typecheck` / `build` 以及「用 JDK 8 重编 `mcanextgen-host.jar`」已在 GitHub Actions 中自动化——`push`（main/master）与所有 PR 触发，见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。所有客户端 jar 均被 gitignore，CI 不依赖任何受版权保护资产、也不启动游戏；待 Phase 4（打包产物）与 Phase 9（跨平台矩阵）引入后本工作流会被替换。
+> **CI（临时最简闸门）**：上述 `typecheck` / `build` 以及「用 JDK 8 重编 `mcanextgen-host.jar`」已在 GitHub Actions 中自动化——`push`（main/master）与所有 PR 触发，见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。所有客户端 jar 均被 gitignore，CI 不依赖任何受版权保护资产、也不启动游戏；待后续阶段（嵌入窗口管理、打包产物、跨平台矩阵）引入后本工作流会被替换。
 
 ### 2. 仓库结构 (Repository Layout)
 
@@ -126,15 +130,16 @@ MCANextGen
 ├── apps/
 │   └── electron/           Electron Edition（Chromium UI + 原生宿主）
 │       └── src/
-│           ├── main/       Electron 主进程（拥有原生窗口）
+│           ├── main/       Electron 主进程（原生窗口拥有者 + 嵌入/焦点转发控制器）
 │           ├── preload/    通过 contextBridge 暴露给渲染层
 │           ├── renderer/   Vue 3 界面
 │           └── shared/     main / preload / renderer 的唯一契约
 └── packages/
+    ├── native-win32/       koffi 直绑 Win32：窗口枚举/跟踪、裁剪容器、嵌入与焦点操作（非 Windows 可安全 import）
     └── runtime/            Minecraft 运行时层，与 Vue / Electron 无关
         └── src/
             ├── java/       Java 发现、探测与 Java 8 选择
-            └── minecraft/  版本注册表、资产布局、JVM 参数组、Applet 入口枚举与进程启动
+            └── minecraft/  版本注册表、资产布局、JVM 参数组、Applet 入口枚举与能力探测、进程启动
 ```
 
 ---
@@ -178,7 +183,7 @@ MCAJNLP 走 `javaws`（Java Web Start 沙箱）、MCAHTML 走浏览器 NPAPI 插
 
 ### 5. 高 DPI 屏上游戏窗口发糊 / 与 Betacraft 窗口同尺寸不同清晰度
 
-系统 Java 8 的 `java.exe` 是 DPI-unaware：Windows 会按缩放比例（如 150%）对窗口做位图拉伸，物理尺寸正确但内容模糊；Betacraft 自带打了 DPI-aware manifest 的 JRE 所以像素原生。这属于已知差异，宿主嵌入（Phase 3/4）后将以物理像素传尺寸统一处理。
+系统 Java 8 的 `java.exe` 是 DPI-unaware：Windows 会按缩放比例（如 150%）对窗口做位图拉伸，物理尺寸正确但内容模糊；Betacraft 自带打了 DPI-aware manifest 的 JRE 所以像素原生。宿主嵌入（Phase 3）已把几何交接统一为**物理像素**（槽位尺寸 = 物理分辨率，CSS px ÷ devicePixelRatio），游戏窗口以客户区精确等于目标物理分辨率嵌入；DPI-unaware 进程侧的渲染细节仍以高分屏实测为准（Phase 4 清单内的 DPI 缩放项）。
 
 ---
 
