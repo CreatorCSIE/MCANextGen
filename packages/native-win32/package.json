@@ -1,0 +1,20 @@
+{
+  "name": "@mcanextgen/native-win32",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCANextGen Windows native window capture/embedding (koffi-bound Win32; Phase 2 detection)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "koffi": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "~5.9.3"
+  }
+}

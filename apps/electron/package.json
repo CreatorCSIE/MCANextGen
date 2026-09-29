@@ -12,7 +12,9 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@mcanextgen/native-win32": "workspace:*",
     "@mcanextgen/runtime": "workspace:*",
+    "koffi": "^3.3.2",
     "vue": "^3.5.43"
   },
   "devDependencies": {

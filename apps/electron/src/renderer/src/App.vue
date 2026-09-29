@@ -114,7 +114,8 @@ async function launchGame(): Promise<void> {
       pid: null,
       exitCode: null,
       exitSignal: null,
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      window: { state: 'none', supported: false, hwnd: null, pid: null, className: null, title: null }
     }
   } finally {
     gameBusy.value = false
@@ -129,6 +130,16 @@ async function stopGame(): Promise<void> {
   } finally {
     gameBusy.value = false
   }
+}
+
+/** Phase 2: human-readable line about the native game window (null = nothing to show). */
+function windowStatusText(): string | null {
+  const view = game.value?.window
+  if (!view || view.state === 'none') return null
+  if (view.state === 'pending') return 'Native window: waiting for the game window to appear…'
+  if (view.state === 'lost') return 'Native window: disappeared while the game process is still alive'
+  const title = view.title ? ` — "${view.title}"` : ''
+  return `Native window detected: ${view.className} ${view.hwnd}${title}`
 }
 
 onMounted(async () => {
@@ -277,6 +288,9 @@ onBeforeUnmount(stopGamePolling)
           :disabled="!selectedVersion?.supportsMultiplayer || game?.running || gameBusy"
         />
       </div>
+
+      <!-- Phase 2: native window detection (by owning pid, not by title) -->
+      <p v-if="windowStatusText()" class="runtime__note">{{ windowStatusText() }}</p>
     </section>
 
     <footer class="host__bar host__bar--footer">

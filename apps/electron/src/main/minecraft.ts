@@ -16,11 +16,17 @@ import {
   resolveMinecraftLayout,
   type MinecraftGame
 } from '@mcanextgen/runtime'
+import {
+  GameWindowTracker,
+  supportsNativeWindowCapture,
+  type NativeWindowInfo
+} from '@mcanextgen/native-win32'
 import type {
   MinecraftAppletList,
   MinecraftLaunchOptionsView,
   MinecraftStateView,
-  MinecraftVersionOptionView
+  MinecraftVersionOptionView,
+  MinecraftWindowView
 } from '../shared/ipc'
 
 /**
@@ -37,15 +43,64 @@ function repoRoot(): string {
 let game: MinecraftGame | null = null
 let lastError: string | null = null
 
+/* --- Native window tracking (Phase 2: detect the game window by owning pid) --- */
+
+let windowTracker: GameWindowTracker | null = null
+let detectedWindow: NativeWindowInfo | null = null
+let windowSeen = false
+
+function resetWindowTracking(): void {
+  windowTracker?.stop()
+  windowTracker = null
+  detectedWindow = null
+  windowSeen = false
+}
+
+function startWindowTracking(session: MinecraftGame): void {
+  resetWindowTracking()
+  if (!supportsNativeWindowCapture()) return
+  windowTracker = new GameWindowTracker(session.pid, {
+    onFound: (window) => {
+      detectedWindow = window
+      windowSeen = true
+    },
+    onLost: () => {
+      detectedWindow = null
+    }
+  })
+  windowTracker.start()
+}
+
+function buildWindowView(running: boolean, pid: number | null): MinecraftWindowView {
+  const supported = supportsNativeWindowCapture()
+  const base = { supported, hwnd: null, pid, className: null, title: null }
+  if (!supported || !running || !pid) return { ...base, state: 'none' }
+  if (detectedWindow) {
+    return {
+      ...base,
+      state: 'found',
+      hwnd: detectedWindow.hwnd,
+      className: detectedWindow.className,
+      title: detectedWindow.title
+    }
+  }
+  // AWT/LWJGL takes a moment from process start to frame creation.
+  if (!windowSeen) return { ...base, state: 'pending' }
+  // A window was up and disappeared while the process is still alive.
+  return { ...base, state: 'lost' }
+}
+
 function toView(): MinecraftStateView {
   const exit = game?.exitInfo() ?? null
+  const running = game?.running() ?? false
   return {
-    running: game?.running() ?? false,
+    running,
     versionId: game?.versionId ?? null,
     pid: game?.pid ?? null,
     exitCode: exit?.code ?? null,
     exitSignal: exit?.signal ?? null,
-    error: lastError
+    error: lastError,
+    window: buildWindowView(running, game?.pid ?? null)
   }
 }
 
@@ -127,9 +182,12 @@ export async function launchMinecraftView(
       extraParameters: options?.extraParameters ?? undefined,
       appletClass: options?.appletClass ?? undefined
     })
+    startWindowTracking(game)
     game.onExit(() => {
-      // Keep the finished session around so the panel can show pid/exit code
-      // until the next launch.
+      // The process (and its window) is gone; stop watching but keep the
+      // finished session around so the panel can show pid/exit code until
+      // the next launch.
+      resetWindowTracking()
     })
   } catch (error) {
     game = null
@@ -154,5 +212,6 @@ export function getMinecraftStatusView(): MinecraftStateView {
 
 /** Terminates the game when the host quits (Phase 1: game is a child process). */
 export function shutdownMinecraft(): void {
+  resetWindowTracking()
   game?.stop()
 }

@@ -14,9 +14,13 @@ const define = { __HOST_VERSION__: JSON.stringify(hostVersion) }
 export default defineConfig({
   main: {
     define,
-    // The runtime package ships TypeScript source so that a future Tauri or CLI
-    // edition can consume the same files; bundling it keeps `out/main` self-contained.
-    plugins: [externalizeDepsPlugin({ exclude: ['@mcanextgen/runtime'] })],
+    // The runtime and native-win32 packages ship TypeScript source so that a
+    // future Tauri/CLI edition can consume the same files; bundling them keeps
+    // `out/main` self-contained. koffi (a native addon) stays external and is
+    // resolved from node_modules at runtime, never bundled.
+    plugins: [
+      externalizeDepsPlugin({ exclude: ['@mcanextgen/runtime', '@mcanextgen/native-win32'] })
+    ],
     resolve: {
       alias: {
         '@main': fileURLToPath(new URL('./src/main', import.meta.url)),

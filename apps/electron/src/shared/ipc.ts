@@ -58,6 +58,25 @@ export interface JavaStatusView {
   durationMs: number
 }
 
+/** Native window detection for the running game process (Phase 2, Win32 only). */
+export interface MinecraftWindowView {
+  /**
+   * `pending`: process is up but no top-level window yet;
+   * `found`: the game window is owned by the process;
+   * `lost`: a window was seen before and has since disappeared;
+   * `none`: nothing to track (no session / unsupported platform).
+   */
+  state: 'none' | 'pending' | 'found' | 'lost'
+  /** Whether native window capture is available on this platform. */
+  supported: boolean
+  /** Window handle in hex, e.g. `0x1a2b3c`. */
+  hwnd: string | null
+  pid: number | null
+  /** Win32 window class name, e.g. `SunAwtFrame`. */
+  className: string | null
+  title: string | null
+}
+
 export interface MinecraftStateView {
   running: boolean
   /** Version id of the current/last game session, e.g. `c0.0.21a_01`. */
@@ -68,6 +87,8 @@ export interface MinecraftStateView {
   exitSignal: string | null
   /** Last launch failure message (missing jar, no Java 8, …). */
   error: string | null
+  /** Native window detection for the current session. */
+  window: MinecraftWindowView
 }
 
 /** Mirrors MinecraftFix in the runtime registry (kept as a literal so the renderer stays dependency-free). */
