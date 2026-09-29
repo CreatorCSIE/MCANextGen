@@ -115,7 +115,17 @@ async function launchGame(): Promise<void> {
       exitCode: null,
       exitSignal: null,
       error: err instanceof Error ? err.message : String(err),
-      window: { state: 'none', supported: false, hwnd: null, pid: null, className: null, title: null }
+      window: {
+        state: 'none',
+        supported: false,
+        hwnd: null,
+        pid: null,
+        className: null,
+        title: null,
+        embedded: false,
+        embedError: null
+      },
+      embed: null
     }
   } finally {
     gameBusy.value = false
@@ -138,9 +148,88 @@ function windowStatusText(): string | null {
   if (!view || view.state === 'none') return null
   if (view.state === 'pending') return 'Native window: waiting for the game window to appear…'
   if (view.state === 'lost') return 'Native window: disappeared while the game process is still alive'
+  if (view.embedError) return `Embedding failed — running windowed: ${view.embedError}`
   const title = view.title ? ` — "${view.title}"` : ''
-  return `Native window detected: ${view.className} ${view.hwnd}${title}`
+  const verb = view.embedded ? 'embedded' : 'detected'
+  return `Native window ${verb}: ${view.className} ${view.hwnd}${title}`
 }
+
+/* --- Embedding slot (Phase 3): the DOM reserves and positions this rect;
+ * main creates the native clip container over it and docks the game window. --- */
+
+const slotEl = ref<HTMLElement | null>(null)
+let reportScheduled = false
+
+/**
+ * Slot geometry from the resolved embed policy:
+ * - fixed: a physical gameWidth×gameHeight box (÷dpr → CSS px), centred by
+ *   the flex viewport; the letterbox background stays DOM-drawn.
+ * - resizable: the slot stretches to fill the viewport and every rect change
+ *   is forwarded to main.
+ */
+const embedSlotStyle = computed<Record<string, string>>(() => {
+  const style: Record<string, string> = {}
+  const embed = game.value?.embed
+  if (!embed) return style
+  const dpr = window.devicePixelRatio || 1
+  if (embed.policy === 'resizable') {
+    style.position = 'absolute'
+    style.inset = '0'
+    return style
+  }
+  style.width = `${embed.gameWidth / dpr}px`
+  style.height = `${embed.gameHeight / dpr}px`
+  style.flex = '0 0 auto'
+  return style
+})
+
+function scheduleBoundsReport(): void {
+  if (reportScheduled) return
+  reportScheduled = true
+  requestAnimationFrame(() => {
+    reportScheduled = false
+    void reportEmbedBounds()
+  })
+}
+
+/** Send the slot's physical-pixel, client-area rect to main. */
+async function reportEmbedBounds(): Promise<void> {
+  const el = slotEl.value
+  const view = game.value
+  if (!el || !view?.embed || view.window.state !== 'found') return
+  const rect = el.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  const bounds = {
+    x: Math.round(rect.left * dpr),
+    y: Math.round(rect.top * dpr),
+    width: Math.round(rect.width * dpr),
+    height: Math.round(rect.height * dpr)
+  }
+  try {
+    game.value = await window.mcanextgen.setMinecraftEmbedBounds(bounds)
+  } catch {
+    // A dropped IPC must not break polling; the next report retries.
+  }
+}
+
+let resizeObserver: ResizeObserver | null = null
+
+// flush: 'post' — slotEl must point at the rendered slot when this runs.
+watch(
+  () => [game.value?.embed?.policy, game.value?.window.state] as const,
+  ([, state]) => {
+    if (state === 'found') scheduleBoundsReport()
+    if (state === 'found' && slotEl.value && !resizeObserver) {
+      resizeObserver = new ResizeObserver(() => scheduleBoundsReport())
+      resizeObserver.observe(slotEl.value)
+    }
+    if (state !== 'found' && resizeObserver) {
+      resizeObserver.disconnect()
+      resizeObserver = null
+    }
+  },
+  { flush: 'post' }
+)
 
 onMounted(async () => {
   try {
@@ -150,9 +239,26 @@ onMounted(async () => {
     error.value = err instanceof Error ? err.message : String(err)
   }
   await detectJava()
+  // Focus forwarding (plan.md risk #3 live update 2): a click anywhere on the
+  // chrome that is NOT an interactive DOM control means "I'm not typing here"
+  // — hand Win32 keyboard focus back to the embedded game window. Clicks
+  // inside the game area never reach the DOM (the native window eats them),
+  // so this covers the DOM-adjacent focus losses; window re-activation is
+  // covered main-side (BrowserWindow 'focus').
+  document.addEventListener('mousedown', forwardFocusToGame, true)
 })
 
-onBeforeUnmount(stopGamePolling)
+function forwardFocusToGame(event: MouseEvent): void {
+  if (!game.value?.window.embedded) return
+  const target = event.target as Element | null
+  if (target && target.closest('input, button, select, textarea, a, label')) return
+  void window.mcanextgen.focusGame().catch(() => {})
+}
+
+onBeforeUnmount(() => {
+  stopGamePolling()
+  document.removeEventListener('mousedown', forwardFocusToGame, true)
+})
 </script>
 
 <template>
@@ -165,12 +271,24 @@ onBeforeUnmount(stopGamePolling)
     </header>
 
     <main id="viewport" class="host__viewport">
-      <div class="viewport__placeholder">
+      <div v-if="!game?.embed" class="viewport__placeholder">
         <p class="viewport__title">Native window container</p>
         <p class="viewport__hint">
           The Minecraft Applet will be embedded here as a native child window.
         </p>
       </div>
+      <!--
+        The slot reserves the embedding rect; main draws the native clip
+        container over it and docks the game window. It is deliberately
+        transparent — the game paints the pixels, the DOM only positions them.
+      -->
+      <div
+        v-else
+        ref="slotEl"
+        class="viewport__slot"
+        :class="`viewport__slot--${game.embed.policy}`"
+        :style="embedSlotStyle"
+      ></div>
     </main>
 
     <section class="runtime">
@@ -214,7 +332,10 @@ onBeforeUnmount(stopGamePolling)
       <div class="runtime__head">
         <span class="runtime__label">Minecraft</span>
         <span v-if="game?.running" class="runtime__verdict runtime__verdict--ok">
-          Running (pid {{ game.pid }}) — external window, embedding lands in Phase 3
+          Running (pid {{ game.pid }})
+          <template v-if="game.window.embedError"> — windowed (embed failed)</template>
+          <template v-else-if="game.window.embedded"> — embedded</template>
+          <template v-else> — waiting for window</template>
         </span>
         <span v-else-if="game && game.exitCode !== null" class="runtime__verdict">
           Exited with code {{ game.exitCode }}
@@ -341,13 +462,17 @@ onBeforeUnmount(stopGamePolling)
 
 .host__viewport {
   flex: 1;
+  position: relative;
   display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 12px;
   min-height: 120px;
 }
 
 .viewport__placeholder {
   flex: 1;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -356,6 +481,20 @@ onBeforeUnmount(stopGamePolling)
   border: 1px dashed var(--host-border);
   border-radius: 6px;
   text-align: center;
+}
+
+/*
+ * The embedding slot: physically exact (fixed: game size; resizable: inset 0),
+ * visually inert — the native clip container and the game window paint over
+ * it. The viewport's own background is the letterbox.
+ */
+.viewport__slot {
+  pointer-events: none;
+}
+
+.viewport__slot--fixed {
+  border: 1px dashed var(--host-border);
+  border-radius: 4px;
 }
 
 .viewport__title {

@@ -82,7 +82,12 @@ export function readJarEntries(jarPath: string): JarEntry[] {
   return entries
 }
 
-/** Everything the Applet scan reads out of a class file's header. */
+/**
+ * Everything the offline scans read out of a class file's header: the Applet
+ * entry scan uses this/super/access/init, the capability probe (see
+ * capabilities.ts) uses the member references, field types, `bipush`
+ * immediates and string constants.
+ */
 export interface ClassMeta {
   /** Internal name, e.g. `net/minecraft/isom/IsomPreviewApplet`. */
   thisName: string
@@ -91,6 +96,36 @@ export interface ClassMeta {
   accessFlags: number
   /** Public no-argument `<init>()V`, explicit or the implicit default one. */
   hasPublicNoArgInit: boolean
+  /**
+   * Every NameAndType in the pool as `name:descriptor` — i.e. all method and
+   * field *references* made from this class (owner-agnostic by design; the
+   * capability anchors match on member name + descriptor, e.g. `getWidth:()I`).
+   */
+  memberRefs: Set<string>
+  /**
+   * The same member references qualified with their resolved owner class,
+   * e.g. `java/awt/Canvas.getWidth:()I`. Owner matters for size anchors:
+   * Classic-era game loops only reference `DisplayMode.getWidth` (display
+   * mode enumeration at fullscreen init), while resizing clients poll
+   * `Canvas.getWidth` per frame — owner-blind matching conflated the two
+   * (measured on 0.0.12a/15a/21a vs Indev 20100223).
+   */
+  qualifiedRefs: Set<string>
+  /** Internal class names referenced from field descriptors (`Lxxx;`). */
+  fieldTypeNames: string[]
+  /**
+   * Immediates of `bipush` opcodes *used as a comparison / call argument*:
+   * the byte-pattern scan only records `bipush k` when the very next byte is
+   * if_icmpeq (0x9F), if_icmpne (0xA0) or invokestatic (0xB8). A loose scan
+   * matches too many raw 0x10 bytes inside multi-byte operands and produced
+   * phantom 87/119 hits (measured on Classic 0.0.12a_03-200018), so the
+   * adjacency requirement is load-bearing for the fullscreen probe.
+   */
+  bipushValues: Set<number>
+  /** Declared methods as `name:descriptor` (e.g. `run:()V` for the game loop). */
+  declaredMethods: Set<string>
+  /** Utf8 payloads of the `String` constants (e.g. `Toggle fullscreen!`). */
+  strings: Set<string>
 }
 
 const ACC_PUBLIC = 0x0001
@@ -118,6 +153,14 @@ function readClassMeta(buf: Buffer): ClassMeta {
   p += 2
   const utf8: (string | undefined)[] = []
   const classNameStringIndex: (number | undefined)[] = []
+  // NameAndType / String entries are resolved after the pool walk: they may
+  // point at Utf8 slots that come later in the pool. Keyed by constant-pool
+  // slot so member refs (tag 9/10/11) can look a NameAndType up by index.
+  const nameAndTypesBySlot: ([number, number] | undefined)[] = []
+  const stringRefs: number[] = []
+  // Field/Method/InterfaceMethod refs: [class index, NameAndType index] —
+  // resolved after the walk (both sides may point at later pool slots).
+  const memberRefEntries: [number, number][] = []
   for (let i = 1; i < cpCount; i++) {
     const tag = buf[p]
     p += 1
@@ -134,6 +177,20 @@ function readClassMeta(buf: Buffer): ClassMeta {
         classNameStringIndex[i] = buf.readUInt16BE(p)
         p += 2
         break
+      case 8: // String -> Utf8 index
+        stringRefs.push(buf.readUInt16BE(p))
+        p += 2
+        break
+      case 12: // NameAndType -> name + descriptor indices
+        nameAndTypesBySlot[i] = [buf.readUInt16BE(p), buf.readUInt16BE(p + 2)]
+        p += 4
+        break
+      case 9: // Fieldref
+      case 10: // Methodref
+      case 11: // InterfaceMethodref -> class index + NameAndType index
+        memberRefEntries.push([buf.readUInt16BE(p), buf.readUInt16BE(p + 2)])
+        p += 4
+        break
       case 5: // Long
       case 6: // Double — occupy two constant-pool slots
         p += 8
@@ -141,15 +198,10 @@ function readClassMeta(buf: Buffer): ClassMeta {
         break
       case 3: // Integer
       case 4: // Float
-      case 9: // Fieldref
-      case 10: // Methodref
-      case 11: // InterfaceMethodref
-      case 12: // NameAndType
       case 17: // Dynamic
       case 18: // InvokeDynamic
         p += 4
         break
-      case 8: // String
       case 16: // MethodType
       case 19: // Module
       case 20: // Package
@@ -161,6 +213,33 @@ function readClassMeta(buf: Buffer): ClassMeta {
       default:
         throw new Error(`unknown constant-pool tag ${tag}`)
     }
+  }
+
+  const memberRefs = new Set<string>()
+  for (const nat of nameAndTypesBySlot) {
+    if (nat === undefined) continue
+    const name = utf8[nat[0]]
+    const descriptor = utf8[nat[1]]
+    if (name !== undefined && descriptor !== undefined) {
+      memberRefs.add(`${name}:${descriptor}`)
+    }
+  }
+  const qualifiedRefs = new Set<string>()
+  for (const [classIndex, natIndex] of memberRefEntries) {
+    const ownerStringIndex = classNameStringIndex[classIndex]
+    const owner = ownerStringIndex === undefined ? undefined : utf8[ownerStringIndex]
+    const nat = nameAndTypesBySlot[natIndex]
+    if (owner === undefined || nat === undefined) continue
+    const name = utf8[nat[0]]
+    const descriptor = utf8[nat[1]]
+    if (name !== undefined && descriptor !== undefined) {
+      qualifiedRefs.add(`${owner}.${name}:${descriptor}`)
+    }
+  }
+  const strings = new Set<string>()
+  for (const stringIndex of stringRefs) {
+    const value = utf8[stringIndex]
+    if (value !== undefined) strings.add(value)
   }
 
   const accessFlags = buf.readUInt16BE(p)
@@ -178,11 +257,26 @@ function readClassMeta(buf: Buffer): ClassMeta {
   const superName = superClass === 0 ? null : name(superClass)
 
   p += 2 + buf.readUInt16BE(p) * 2 // interfaces_count + its u2 array
+
+  // Fields are parsed (not skipped): their descriptors are the one-hop edge
+  // from an applet entry class to the game main class it drives.
+  const fieldTypeNames: string[] = []
   const fieldsCount = buf.readUInt16BE(p)
-  p = skipMembers(buf, p + 2, fieldsCount)
+  p += 2
+  for (let f = 0; f < fieldsCount; f++) {
+    const descriptor = utf8[buf.readUInt16BE(p + 4)]
+    if (descriptor !== undefined) {
+      for (const match of descriptor.matchAll(/L([^;]+);/g)) {
+        fieldTypeNames.push(match[1])
+      }
+    }
+    p = skipAttributes(buf, p + 6)
+  }
+
   const methodsCount = buf.readUInt16BE(p)
   p += 2
-
+  const bipushValues = new Set<number>()
+  const declaredMethods = new Set<string>()
   let sawAnyInit = false
   let sawPublicNoArgInit = false
   for (let m = 0; m < methodsCount; m++) {
@@ -194,7 +288,10 @@ function readClassMeta(buf: Buffer): ClassMeta {
       sawAnyInit = true
       if ((methodAccess & ACC_PUBLIC) !== 0) sawPublicNoArgInit = true
     }
-    p = skipAttributes(buf, p)
+    if (methodName !== undefined && methodDescriptor !== undefined) {
+      declaredMethods.add(`${methodName}:${methodDescriptor}`)
+    }
+    p = scanMethodAttributes(buf, p, utf8, bipushValues)
   }
 
   return {
@@ -203,16 +300,54 @@ function readClassMeta(buf: Buffer): ClassMeta {
     accessFlags,
     // A class that declares no constructor at all gets the implicit default
     // one, whose visibility follows the (public) class itself.
-    hasPublicNoArgInit: sawPublicNoArgInit || !sawAnyInit
+    hasPublicNoArgInit: sawPublicNoArgInit || !sawAnyInit,
+    memberRefs,
+    qualifiedRefs,
+    fieldTypeNames,
+    bipushValues,
+    declaredMethods,
+    strings
   }
 }
 
-/** Skips `count` field_info/method_info entries (attributes included). */
-function skipMembers(buf: Buffer, start: number, count: number): number {
+/**
+ * Walks a method's attributes, collecting `bipush` immediates from Code
+ * bodies, and returns the offset after the table.
+ *
+ * The Code scan is a byte-pattern sweep for the 0x10 (bipush) opcode rather
+ * than a full opcode walk — variable-length instructions (tableswitch padding,
+ * wide) make precise decoding heavy. To keep the sweep from matching raw 0x10
+ * bytes inside other operands, a value is only recorded when the byte after
+ * the operand starts a comparison or a static call: if_icmpeq (0x9F),
+ * if_icmpne (0xA0) or invokestatic (0xB8) — the shapes `bipush k; if_icmp*`
+ * and `bipush k; invokestatic isKeyDown(I)Z` actually compile to.
+ */
+function scanMethodAttributes(
+  buf: Buffer,
+  start: number,
+  utf8: (string | undefined)[],
+  bipushValues: Set<number>
+): number {
   let p = start
+  const count = buf.readUInt16BE(p)
+  p += 2
   for (let i = 0; i < count; i++) {
-    p += 6 // access_flags + name_index + descriptor_index
-    p = skipAttributes(buf, p)
+    const attributeName = utf8[buf.readUInt16BE(p)]
+    const length = buf.readUInt32BE(p + 2)
+    if (attributeName === 'Code') {
+      // Code: max_stack u2, max_locals u2, code_length u4, then the bytes.
+      const codeLength = buf.readUInt32BE(p + 10)
+      const codeStart = p + 14
+      const codeEnd = Math.min(codeStart + codeLength, buf.length - 2)
+      for (let c = codeStart; c < codeEnd; c++) {
+        if (buf[c] !== 0x10) continue
+        const successor = buf[c + 2]
+        if (successor === 0x9f || successor === 0xa0 || successor === 0xb8) {
+          bipushValues.add(buf[c + 1])
+        }
+      }
+    }
+    p += 6 + length
   }
   return p
 }

@@ -35,6 +35,8 @@ export type { MinecraftExitInfo, MinecraftGame, MinecraftLaunchOptions } from '.
 export { MinecraftLaunchError, launchMinecraft } from './minecraft/launch'
 export type { AppletClassList } from './minecraft/applets'
 export { listAppletClasses } from './minecraft/applets'
+export type { EntryCapabilities } from './minecraft/capabilities'
+export { detectEntryCapabilities } from './minecraft/capabilities'
 export {
   DEFAULT_FIX_ARGUMENTS,
   DEFAULT_GAME_JVM_ARGUMENTS,

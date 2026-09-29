@@ -189,11 +189,11 @@ Reliably identify the Minecraft native window.
 
 Tasks:
 
-* [ ] Detect Minecraft window by process
-* [ ] Avoid relying only on window title
-* [ ] Verify process ownership
-* [ ] Store native window handle
-* [ ] Detect window creation/destruction
+* [x] Detect Minecraft window by process
+* [x] Avoid relying only on window title
+* [x] Verify process ownership
+* [x] Store native window handle
+* [x] Detect window creation/destruction
 * [ ] Handle Minecraft restart
 
 The result should be:
@@ -208,6 +208,35 @@ HWND
 
 This phase must work before attempting embedding.
 
+## Implemented (Phase 2)
+
+`@mcanextgen/native-win32` (koffi → user32, lazy-bound, non-Windows import-safe):
+
+* `findGameWindow(pid)` — the owning-PID check (`GetWindowThreadProcessId`) narrows
+  the field, and candidates must carry a game window class (`SunAwtFrame`/`LWJGL`).
+  The class anchor replaced the pid-only rule after live measurement: the Sogou IME
+  injects a visible `SoPY_Status` top-level into the java process, which pid-only
+  matching adopted as the "game window" once the real frame went WS_CHILD (embedded)
+  and left `EnumWindows`. Candidates are additionally visible + unowned; a titled
+  class-match wins (the isom preview carries its own title). Foreign-window text
+  is read only via `SendMessageTimeoutW(SMTO_ABORTIFHUNG)` — bare `GetWindowText`
+  is a synchronous cross-process send and a deadlock against attached input queues
+  (risk #2).
+* `GameWindowTracker` — 500 ms poll emitting onFound/onLost (creation/destruction);
+  while the tracked window is alive a new candidate never steals it (anti-hijack),
+  and an embedded WS_CHILD frame "missing from EnumWindows" is verified with
+  `IsWindow`+pid, not treated as lost.
+  Polling instead of `SetWinEventHook` because a WinEvent hook needs a native
+  message pump; Phase 3 introduces one anyway (the clip window) and can revisit.
+* The detected window ships to the renderer inside `MinecraftStateView.window`
+  (state `none|pending|found|lost` + hwnd/class/title) over the existing status poll.
+
+Verified on Windows: live-desktop enumeration, and end-to-end against both a JDK 8
+AWT probe frame and real game sessions — Classic 0.0.21a_01 (`SunAwtFrame`,
+title `Minecraft`) and Infdev 20100617-1531 running `IsomPreviewApplet`
+(title `Infinite Map Visualizer`) were each hit precisely by pid, with Stop
+cleaning the tracker up. `Handle Minecraft restart` closes out in Phase 3/4 wiring.
+
 ---
 
 # 7. Phase 3 — Windows Child Window Embedding PoC
@@ -220,15 +249,41 @@ Convert the already-detected Minecraft top-level window into a child window of t
 
 Tasks:
 
-* [ ] Obtain MCANextGen native HWND
-* [ ] Obtain Minecraft HWND
-* [ ] Save original Minecraft window styles
-* [ ] Modify required window styles
-* [ ] Reparent Minecraft HWND
-* [ ] Set Minecraft window position
-* [ ] Set Minecraft window size
-* [ ] Remove unwanted title/border decorations
-* [ ] Keep Minecraft inside the host client area
+* [x] Obtain MCANextGen native HWND  (`BrowserWindow.getNativeWindowHandle()` → main/embedding.ts)
+* [x] Obtain Minecraft HWND  (Phase 2 `GameWindowTracker`, by owning pid)
+* [x] Save original Minecraft window styles  (`embedder.ts` GetWindowLongPtrW before reparent)
+* [x] Modify required window styles  (decoration bits + WS_POPUP cleared, WS_CHILD set — see architecture)
+* [x] Reparent Minecraft HWND  (`SetParent(game → clip)`)
+* [x] Set Minecraft window position  (per-policy `gameRect`: fixed centred, resizable fills)
+* [x] Set Minecraft window size  (fixed = native 854×480 never stretched; resizable = clip client)
+* [x] Remove unwanted title/border decorations  (native strip only — the Java-side
+  undecorated frame broke LWJGL2 parented mode, see risk #4 reversal)
+* [x] Keep Minecraft inside the host client area  (clip `WS_CHILD` under the Electron HWND; slot rect from renderer)
+
+Status: implemented end-to-end (runtime probe → launch `embedded` flag → main embedding
+controller → `App.vue` slot + IPC bounds) and the pure-native SetParent/clip/unembed loop
+passed the standalone PoC (p6). Typecheck + build green. Live run with Classic 0.0.21a_01
+confirmed correct geometry and rendering inside the slot (617 fps). Three blockers surfaced
+by the live run and fixed: Chromium's DirectComposition layer painting over every native
+child window (needs the disable switch below — risk #7), a polling `WM_GETTEXT` deadlock
+that froze both attached input queues on the first click into the game (risk #2 confirmed,
+mitigated), and the Sogou-IME `SoPY_Status` window hijacking the pid-only tracker after
+reparent hid the real frame from `EnumWindows` (class anchor + hijack guard, see Phase 2).
+The top-left caption flash / residual □× frames are addressed by the off-screen parking
+described in the architecture section (Java watchdog + native `bringWindowOnScreen` rescue
+ as fallbacks). The "Back to game" / refocus freeze was reproduced and pinned to a
+three-way AWT deadlock (game thread ↔ EDT ↔ AWT-Windows, identical jstack frames across
+3 minutes) — fixed host-side by the applet-mouse guard (risk #3, CONFIRMED). The guard's
+residual input gap (uncaptured mouse + keyboard dead after a focus round-trip) was closed
+by host-side **focus forwarding** (native `focusNativeWindow`/`findFocusTargetWithin` +
+`BrowserWindow 'focus'` hook + renderer chrome-click IPC) — live-confirmed: the problem
+is fully solved, keyboard and mouse capture survive Alt+Tab round-trips and DOM clicks.
+Input verified; teardown (Stop / window close) live-confirmed clean. The
+detach flash (window jumping to the top-left as `SetParent(null)` reinterprets
+child coords as screen coords) is fixed by parking the game window at
+-32000,-32000 (parent-client-relative while still a child, outer size via
+GetWindowRect, `bRepaint=false`) *before* the reparent — the embed-failure
+path reverses it via `bringWindowOnScreen` as before.
 
 Target:
 
@@ -243,9 +298,225 @@ Success criteria:
 * OpenGL continues to work
 * Minecraft receives keyboard input
 * Minecraft receives mouse input
-* Minecraft can be resized
+* Minecraft can be resized — scoped to `resizable` versions (see capability probe);
+  `fixed` versions stay at native size and letterbox (a version that cannot resize
+  internally cannot pass this criterion, so it applies per capability, not per host)
 * Minecraft can be closed safely
 * Host can be closed safely
+
+## Embedding architecture (decided)
+
+The game window is never parented directly into Chromium's top-level HWND — Chromium
+owns that window, has its own child HWNDs, and would fight the game window over
+z-order and hit-testing. Instead an intermediate clip window is created by the host:
+
+```text
+Electron top-level HWND  (Chromium-owned)
+└── clip window          (WS_CHILD, registered class + DefWindowProc, koffi-made)
+    └── Minecraft HWND   (reparented, decoration-stripped, converted to WS_CHILD)
+```
+
+The game window must be converted to **WS_CHILD** on embed (clear WS_POPUP, set
+WS_CHILD): Win32 positions a WS_POPUP-with-parent in *screen* coordinates
+without clipping it to the parent — so the game would "vanish" off in a corner
+instead of docking into the slot. Only a WS_CHILD window is laid out against the
+clip's client area and clipped by it.
+The Electron path launches the frame **decorated** (an undecorated SunAwtFrame
+breaks LWJGL2 parented mode — see risk #4 reversal) and strips the decorations
+natively at embed time. To kill the top-left caption flash + residual □× frames
+while docking, the Java host **parks the frame off-screen** (`setLocation(-32000,
+-32000)` before `setVisible`) so the caption is only ever painted where nobody
+can see it; after SetParent the child coords still fall outside the clip, and
+MoveWindow docks it with decorations already gone. Two safety nets exist for an
+embedding that never lands: a Java-side watchdog thread pulls the frame back
+on-screen after 10s, and the native `bringWindowOnScreen` rescue runs in the
+embedding failure path. A
+side effect the tracker must absorb: once WS_CHILD, `EnumWindows` no longer
+enumerates the game window, so "lost" is decided by `IsWindow`+pid, not by
+re-enumeration.
+
+Consequences accepted by design:
+
+* Windowed overlay: native child windows are not composited by Chromium and always
+  paint above the DOM. The renderer's placeholder container only positions the clip
+  window; no DOM element may overlap the game area.
+* **DirectComposition must be disabled host-wide** (measured): Chromium composites web
+  content through an `Intermediate D3D Window` in a DComp visual tree, and that tree
+  paints above *every* plain child HWND regardless of z-order — the embedded game is
+  invisible even when its clip is topmost. `app.disableHardwareAcceleration()` alone
+  does not remove the D3D window; `app.commandLine.appendSwitch('disable-direct-composition')`
+  is the switch that makes native child embedding visible at all (risk #7).
+* The clip window lives on the Electron main thread; its messages are pumped by
+  Chromium's UI message loop (verify first — see PoC order).
+* Teardown order is a hard rule: un-embed (or kill java) before the host window /
+  clip window dies, otherwise java touches a destroyed handle and crashes.
+
+## Container sizing and DPI semantics (decided)
+
+* The placeholder container is 854×480 CSS px for `fixed` versions — sized so the
+  game fills it exactly at the current DPR (CSS = physical ÷ devicePixelRatio);
+  the DOM background behind it IS the letterbox.
+* The game window is embedded at its native physical size and is never stretched:
+  Windows cannot scale child-window content, and Java 8 AWT renders physical pixels.
+* `resizable` versions: the container fills the available content area and the game
+  window follows via MoveWindow; the game's own per-frame canvas-size poll is the
+  synchronizer (see capability probe — Indev 20100223+ already polls).
+* Physical rects travel renderer → main (`getBoundingClientRect()` × DPR, rAF-throttled);
+  recompute on DPR change (per-monitor DPI), not just on resize.
+* Host minimum window size is enforced so the clip window never crops the game.
+
+## Capability probe (decided, offline — same jar parse as the Applet entry scan)
+
+Embedding policy per entry class comes from bytecode, not from era guesswork. The
+entry class is an unobfuscated anchor (`com.mojang.minecraft.MinecraftApplet`,
+`net.minecraft.client.MinecraftApplet`); the game main class is reached one hop via
+the field-type or super-class topology (both exist across versions — probe
+`{entry} ∪ superchain(entry) ∪ field types`):
+
+```text
+supportsFullscreen = same class contains BOTH:
+    ① an F11 key check: bipush 87 (LWJGL KEY_F11) / 119 (AWT VK_F11) whose very next
+       bytecode is a compare/call (if_icmpeq 0x9F | if_icmpne 0xA0 | invokestatic 0xB8)
+    ② a fullscreen API ref: Display.setFullscreen | Frame.setExtendedState | setUndecorated
+resizable = game-loop class (declares run:()V) polls the AWT canvas each frame via the
+    owner-qualified java/awt/Canvas.getWidth()I AND java/awt/Canvas.getHeight()I
+    (scaling lives in the renderer class — drawImage to canvas size — the game class
+     just polls; the literal method name "resize" is NOT the anchor)
+```
+
+Both anchors are owner/adjacency-qualified on purpose. An owner-blind `getWidth:()I`
+matches three unrelated things: the real per-frame canvas poll (Indev), Classic-era
+`org/lwjgl/opengl/DisplayMode.getWidth` (fullscreen display-mode enumeration — 21a/12a/15a
+hit this in their `run` loop), and the isom previewer's own inherited `getWidth`. Likewise
+a raw `0x10` byte sweep finds phantom `bipush 87/119` inside multi-byte operands (measured
+on 0.0.12a); requiring the comparison/call successor byte is what makes the co-occurrence
+rule trustworthy. The `run:()V` requirement drops the entry wrapper, whose `init()` reads
+the canvas size exactly once to seed the framebuffer — one-shot, not resize adaptation.
+
+Registry fields `supportsFullscreen` / `resizePolicy` override the probe where a
+version misleads it; the probe fills the default.
+
+Measured matrix (javap ground truth, 2026-09; the offline `capabilities.ts` probe now
+reproduces this verdict for every registered entry class — verified against these rows):
+
+| jar / entry | F11 check | fullscreen API | canvas poll | verdict |
+| :-- | :-- | :-- | :-- | :-- |
+| Classic 0.0.21a_01 | none | 1× `Display.setFullscreen` (dead branch, no main, jar bundles no LWJGL) | only `DisplayMode.getWidth` in run loop | fixed, no F11 |
+| Classic 0.0.12a_03 | phantom `bipush 87` (raw-byte artifact; adjacency clears it) | `setFullscreen` in `c` (run) | `DisplayMode` only | fixed, no F11 |
+| Classic 0.0.15a | none | `setFullscreen` in `c` (run) | `DisplayMode` only | fixed, no F11 |
+| Indev 20100223 | `bipush 87` ×1 | 2× `Display.setFullscreen` + "Toggle fullscreen!" | `java/awt/Canvas.getWidth`× | resizable + F11 |
+| Infdev 20100617-1531 | `bipush 87` ×1 | `Display.setFullscreen` + `Display.update` + "Toggle fullscreen!" | `java/awt/Canvas.getWidth`× | resizable + F11 |
+| Infdev `isom.IsomPreviewApplet` | none in probe set | none in probe set | own inherited `getWidth` only | fixed, no F11 |
+
+The Classic rows are why ①+② must co-occur: API refs alone false-positive on Notch's
+early dead LWJGL experiments. Corollary kept as a sanity rule: a fullscreen toggle
+implies resize logic must exist (a display-mode change has to be adapted to).
+`isom` needs no special case — its probe set never contains the game class, so it
+lands on fixed/no-F11 naturally.
+
+## Risk register (predicted, to be retired or confirmed by the PoC)
+
+1. koffi WndProc callbacks (GC-pinned) pumped by Chromium's UI loop — verify first
+2. **CONFIRMED + mitigated**: cross-process SetParent implicitly attaches input queues —
+   a wedged java EDT can freeze the Electron UI thread. Measured form: the first click
+   into the embedded game deadlocked the *whole host* ("not responding", game still at
+   617 fps) because the 500 ms window-tracker poll called `GetWindowText` on every
+   desktop window — a synchronous cross-process `WM_GETTEXT` — and one of those sends
+   met the Java thread's activation traffic head-on through the attached queues.
+   Mitigation (both required): poll hot paths filter by pid with message-free reads
+   *before* describing any window, and foreign-window text goes through
+   `SendMessageTimeoutW(SMTO_ABORTIFHUNG)` only. Residual: `MoveWindow` on bounds change
+   is still a synchronous send to the Java thread (rare, fixed-policy slots).
+3. **CONFIRMED (as an AWT deadlock, not Electron focus theft)**: the applet-era
+   "Back to game freezes the game" plague reproduces here and was caught red-handed
+   by three jstack dumps 3 minutes apart — game thread, EDT and AWT-Windows all
+   frozen in identical native frames. Mechanism: applet mouse mode (`g`) makes the
+   game thread call `canvas.getLocationOnScreen` + `MouseInfo.getPointerInfo` +
+   `Robot.mouseMove` **every frame while holding the AWTTreeLock** (AWT natives wait
+   on the native AWT_LOCK); clicking the unfocused window makes LWJGL's Java-side
+   wndproc call `grabFocus()` → EDT `requestWindowFocus`, which **holds AWT_LOCK**
+   while Win32 `SetFocus` waits for the game thread to process WM_KILLFOCUS — which
+   never happens because that thread is blocked on the lock the EDT holds. Cycle:
+   game ↔ EDT ↔ AWT-Windows. Mitigation (host-side, no game jar edits):
+   `Patches.protectAppletMouseMode` waits for `Display.setParent` to land
+   (polls `WindowsDisplay.parent != null`), then flips the game's applet-mode flag
+   to false — the run loop switches to the standalone mouse branch
+   (`Mouse.setGrabbed` + LWJGL cursor clipping, pure Win32/jinput, zero AWT calls
+   on the game thread), so the cycle can never form. Display stays parented; menu
+   auto-open (`d()`) and grab-on-resume (`b()`) work through the native branch.
+   Chromium-side click-to-focus never had to be touched. Live confirmation pending.
+   **Live update 2** (0.0.21a_01): deadlock gone, but the native branch exposes an
+   embedding-specific input gap — mouse never captures and keyboard dies after
+   focus-loss + Back-to-game. 21a `MinecraftApplet` has **no `addKeyListener`**
+   (javap-verified): the keyboard was *always* the LWJGL native route, so the gap
+   is not caused by the flip itself — the LWJGL child HWND simply never receives
+   *Win32* keyboard focus inside a frame that was SetParent-ed across processes
+   into Electron (Java AWT focus ≠ native focus). Nothing to steal from Betacraft
+   here: their wrappers own a plain top-level AWT Frame, so LWJGL's
+   `update()`-side `setFocus(getHwnd())` auto-refocus always works; our embedding
+   is what removed that guarantee.
+   **Betacraft cross-check** (v1 branch, `org.betacraft`): three wrapper shapes —
+   ① base `Wrapper` (early Classic incl. 21a): the wrapper *itself* is an
+   `Applet`+`AppletStub` hosting the real `MinecraftApplet` in a self-made Frame;
+   Windows keeps applet mode. ② `Classic12a`/`15aWrapper` ("pretends to be
+   MinecraftApplet"): **bypass the applet entirely** — reflect `new Minecraft-
+   gameClass(Canvas, w, h, fullscreen)` (21a `d` has this ctor: `d(Canvas,I,I,Z)`),
+   stuff params fields, `new Thread(run).start()`. ③ `Wrapper.init()` contains
+   `// Linux mouse fix, really ugly`: flips the public boolean applet-mode field
+   to false right after `applet.init()` — *identical trick to ours*. Two facts it
+   confirms: the setParent-vs-own-window decision in 21a `run()` is `B != null`
+   (the Canvas ctor arg, offsets 108-121), **not** `g` — so flipping `g` cannot
+   unparent the display and our poll-for-parent-landing is unnecessary; and
+   `g=false` additionally switches on local `level.dat` persistence (offsets
+   453+; benign when cwd is the instance dir). Their per-OS choice: Windows=true
+   (Robot branch), Linux/fullscreen=false (native branch) — meaning the native
+   input branch *is* considered the sane path for a game that owns its window
+   focus; our remaining problem is purely host-side focus delivery.
+   **RESOLVED (live-confirmed)**: host-side focus forwarding — native
+   `findFocusTargetWithin` (EnumChildWindows + GetClassNameW, message-free)
+   picks the `LWJGL` child HWND under the embedded frame (fallback
+   `SunAwtCanvas` → frame) and `focusNativeWindow` delivers SetFocus across the
+   thread boundary via AttachThreadInput. Triggers: `BrowserWindow 'focus'`
+   (Alt+Tab round-trip — the exact dead-keyboard scenario) and renderer
+   chrome-click IPC (`minecraft:focus-game`, non-interactive mousedown). After
+   this, keyboard, mouse capture and Back-to-game all work — the deadlock fix
+    (g-flip, risk #3) plus focus forwarding close the input loop entirely.
+    Follow-up (live-observed): forwarding made focus *sticky* — the host
+    window's deactivation never round-tripped into the attached Java queue, so
+    the game kept `isFocused=true` on Alt+Tab away (no pause menu, cursor left
+    clipped). Fixed symmetrically: `BrowserWindow 'blur'` →
+    `clearNativeFocus` (AttachThreadInput + `SetFocus(NULL)`) delivers a
+    genuine WM_KILLFOCUS, restoring browser-era blur semantics. Second-order
+    finding (live): with Win32 focus living in the attached Java queue,
+    Chromium's own `blur` event stopped firing reliably on Alt+Tab / Win key
+    too — so blur detection cannot rely on Electron events. A
+    `GetForegroundWindow` polling watcher was tried to close that gap and
+    REVERTED: the handle comparison misfires on the embedded setup and its
+    `SetFocus(NULL)` killed all game input — accepted residual (the game can
+    transiently stay focused after Alt+Tab; input correctness wins).
+4. **REVERSED**: AWT peer style-stripping is now the *primary* path, and creating the
+   frame undecorated Java-side (`mcanextgen.embed`) is **off** — measured: an
+   undecorated SunAwtFrame breaks LWJGL2 parented mode (the `LWJGL` child window inside
+   the canvas never gets WS_VISIBLE → white game before any reparenting). A decorated
+   frame stripped natively keeps the exact same style stable (p6), and the LWJGL window
+   shows and renders.
+5. teardown ordering (see architecture above)
+6. `Display.setFullscreen` reachability: the game jars do not bundle LWJGL but the
+   launcher classpath provides it, so F11 paths are loadable — pressing F11 inside an
+   embedded Indev may crash or escape the embedding; Phase 4 remapping removes the
+   call path entirely (probe decides whether to install it)
+7. **CONFIRMED**: Chromium's DirectComposition visual tree (`Intermediate D3D Window`)
+   paints above all plain child HWNDs regardless of z-order — embedded native windows
+   are invisible unless the host runs with `--disable-direct-composition` (see
+   architecture note; software rendering alone does not help)
+
+## PoC order
+
+1. Pure native: koffi clip window + JDK 8 AWT probe frame — create/register/embed/
+   move/unembed/destroy loop without Electron in the picture
+2. Electron: embed into the top-level HWND first (fastest way to surface overlay and
+   focus behavior), then switch to the clip window
+3. Real game: Classic 0.0.21a_01 (fixed) first, then Indev/Infdev (resizable + F11)
 
 ---
 
@@ -253,7 +524,8 @@ Success criteria:
 
 After the basic reparenting PoC succeeds:
 
-* [ ] Synchronize host resize → Minecraft resize
+* [ ] Synchronize host resize → Minecraft resize (per `resizePolicy`; `fixed` versions
+  never receive a size change — maximize only grows the surrounding chrome)
 * [ ] Handle focus changes
 * [ ] Handle mouse capture
 * [ ] Handle keyboard focus
@@ -263,6 +535,14 @@ After the basic reparenting PoC succeeds:
 * [ ] Handle Minecraft restart
 * [ ] Handle DPI scaling
 * [ ] Handle window destruction
+* [ ] F11 remapping: the game's own fullscreen must never run against an embedded
+  window. AWT-route fullscreen (Frame API) is intercepted Java-side (host Frame
+  subclass → stdout event → host enters `setFullScreen(true)` and grows the
+  container; the game adapts via its canvas poll). LWJGL-route F11 is polled input
+  the Frame cannot see, so either the same host-driven fullscreen is offered and the
+  game's F11 is swallowed Java-side, or a Display shim shadows `setFullscreen` —
+  decide by measurement (press F11 in embedded Indev/Infdev and record what happens)
+* [ ] Enforce host minimum window size from the embedded window's native size
 
 The embedded Minecraft window should behave as part of the MCANextGen window.
 

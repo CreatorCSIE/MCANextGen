@@ -65,6 +65,14 @@ export interface MinecraftLaunchOptions {
    * (the UI passes the checked list so users can toggle patches per launch).
    */
   fixesEnabled?: readonly MinecraftFix[]
+  /**
+   * Phase 3 embedding: the host will reparent the game window into a clip
+   * container, so the Java frame parks itself off-screen at startup (the
+   * frame stays DECORATED — an undecorated SunAwtFrame breaks LWJGL2's
+   * parented mode; decorations are stripped natively at embed time). Only set
+   * when the host can actually embed the window (native capture available).
+   */
+  embedded?: boolean
 }
 
 export interface MinecraftExitInfo {
@@ -151,6 +159,7 @@ export async function launchMinecraft(options: MinecraftLaunchOptions): Promise<
     // Alternate entry classes are separate programs (e.g. the isom preview);
     // they get their own window title instead of sharing "Minecraft".
     `-Dmcanextgen.title=${options.title ?? appletWindowTitle(entryAppletClass) ?? 'Minecraft'}`,
+    ...(options.embedded ? ['-Dmcanextgen.embed=true'] : []),
     '-cp',
     layout.hostJar,
     hostMainClass

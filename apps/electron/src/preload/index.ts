@@ -10,7 +10,10 @@ const api: HostApi = {
   getMinecraftStatus: () => ipcRenderer.invoke(IPC.MINECRAFT_STATUS),
   listMinecraftVersions: () => ipcRenderer.invoke(IPC.MINECRAFT_LIST_VERSIONS),
   listMinecraftApplets: (versionId: string) =>
-    ipcRenderer.invoke(IPC.MINECRAFT_LIST_APPLETS, versionId)
+    ipcRenderer.invoke(IPC.MINECRAFT_LIST_APPLETS, versionId),
+  setMinecraftEmbedBounds: (bounds) =>
+    ipcRenderer.invoke(IPC.MINECRAFT_SET_EMBED_BOUNDS, bounds),
+  focusGame: () => ipcRenderer.invoke(IPC.MINECRAFT_FOCUS_GAME)
 }
 
 contextBridge.exposeInMainWorld('mcanextgen', api)

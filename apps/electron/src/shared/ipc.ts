@@ -18,7 +18,11 @@ export const IPC = {
   /** Registered versions for the picker, straight from the runtime registry. */
   MINECRAFT_LIST_VERSIONS: 'minecraft:list-versions',
   /** Enumerates the Applet entry classes inside a version's client jar (offline scan). */
-  MINECRAFT_LIST_APPLETS: 'minecraft:list-applets'
+  MINECRAFT_LIST_APPLETS: 'minecraft:list-applets',
+  /** Reports the physical-pixel rect of the embedding slot (renderer → main). */
+  MINECRAFT_SET_EMBED_BOUNDS: 'minecraft:set-embed-bounds',
+  /** Forwards Win32 keyboard focus to the embedded game window (renderer → main). */
+  MINECRAFT_FOCUS_GAME: 'minecraft:focus-game'
 } as const
 
 export interface HostInfo {
@@ -75,6 +79,32 @@ export interface MinecraftWindowView {
   /** Win32 window class name, e.g. `SunAwtFrame`. */
   className: string | null
   title: string | null
+  /** True while the game window is reparented into the embedding slot. */
+  embedded: boolean
+  /** Last embedding failure (a windowed fallback banner; null while healthy). */
+  embedError: string | null
+}
+
+/** Physical-pixel rectangle of the embedding slot, client-area coordinates. */
+export interface MinecraftEmbedBoundsView {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Embedding policy decided at launch (registry override wins over the
+ * bytecode capability probe, see runtime capabilities.ts). The renderer uses
+ * `policy` + the game size to lay out the slot: `fixed` centres a
+ * physical-pixel `gameWidth × gameHeight` box and letterboxes the rest,
+ * `resizable` lets the slot fill the viewport and forwards every rect change.
+ */
+export interface MinecraftEmbedView {
+  policy: 'fixed' | 'resizable'
+  /** Physical pixels; for `fixed` this is the never-stretched game size. */
+  gameWidth: number
+  gameHeight: number
 }
 
 export interface MinecraftStateView {
@@ -89,6 +119,8 @@ export interface MinecraftStateView {
   error: string | null
   /** Native window detection for the current session. */
   window: MinecraftWindowView
+  /** Embedding policy for the current session (null until a launch decides). */
+  embed: MinecraftEmbedView | null
 }
 
 /** Mirrors MinecraftFix in the runtime registry (kept as a literal so the renderer stays dependency-free). */
@@ -143,4 +175,8 @@ export interface HostApi {
   getMinecraftStatus(): Promise<MinecraftStateView>
   listMinecraftVersions(): Promise<MinecraftVersionOptionView[]>
   listMinecraftApplets(versionId: string): Promise<MinecraftAppletList>
+  /** Report the slot's physical rect; main creates/updates the embedding to match. */
+  setMinecraftEmbedBounds(bounds: MinecraftEmbedBoundsView): Promise<MinecraftStateView>
+  /** Hand keyboard focus to the embedded game window (no-op while not embedded). */
+  focusGame(): Promise<void>
 }

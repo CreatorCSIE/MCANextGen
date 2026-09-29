@@ -1,12 +1,19 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath, URL } from 'node:url'
-import { IPC, type HostInfo, type MinecraftLaunchOptionsView } from '@shared/ipc'
+import {
+  IPC,
+  type HostInfo,
+  type MinecraftEmbedBoundsView,
+  type MinecraftLaunchOptionsView
+} from '@shared/ipc'
 import { detectJava } from './java'
+import { attachMainWindow, focusGameInput } from './embedding'
 import {
   getMinecraftStatusView,
   launchMinecraftView,
   listMinecraftAppletsView,
   listMinecraftVersionsView,
+  setMinecraftEmbedBoundsView,
   shutdownMinecraft,
   stopMinecraftView
 } from './minecraft'
@@ -15,6 +22,20 @@ import {
 declare const __HOST_VERSION__: string
 
 app.setName('MCANextGen')
+
+// Phase 3 embedding prerequisite: Chromium composites web contents through a
+// DirectComposition visual tree (a child "Intermediate D3D Window"), and DWM
+// layers that tree above every ordinary child HWND of the window regardless of
+// GDI z-order. A koffi-made clip container (plain GDI child, with the game
+// window inside it) then paints invisibly *under* the DOM — measured: geometry,
+// parent chain, styles and even z-order were all correct (clip on top of
+// Chrome_RenderWidgetHostHWND) yet still hidden by the D3D layer.
+// disableHardwareAcceleration() alone does NOT remove the Intermediate D3D
+// Window on Chromium 152; --disable-direct-composition forces the compositor to
+// render into the window's own surface, so native child windows can overlay it.
+// The UI is a simple panel; the cost of software compositing is nil.
+app.disableHardwareAcceleration()
+app.commandLine.appendSwitch('disable-direct-composition')
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -40,6 +61,10 @@ function createWindow(): BrowserWindow {
   } else {
     win.loadFile(fileURLToPath(new URL('../renderer/index.html', import.meta.url)))
   }
+
+  // Bind the embedding controller to this window: its `close` hook unembeds
+  // the game before the native host HWND (and its child tree) is destroyed.
+  attachMainWindow(win)
 
   return win
 }
@@ -68,6 +93,11 @@ function registerIpc(): void {
   ipcMain.handle(IPC.MINECRAFT_LIST_APPLETS, (_event, versionId: string) =>
     listMinecraftAppletsView(versionId)
   )
+  ipcMain.handle(
+    IPC.MINECRAFT_SET_EMBED_BOUNDS,
+    (_event, bounds: MinecraftEmbedBoundsView) => setMinecraftEmbedBoundsView(bounds)
+  )
+  ipcMain.handle(IPC.MINECRAFT_FOCUS_GAME, () => focusGameInput())
 }
 
 app.whenReady().then(() => {

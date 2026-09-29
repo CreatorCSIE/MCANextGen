@@ -7,6 +7,7 @@
 import path from 'node:path'
 import { app } from 'electron'
 import {
+  detectEntryCapabilities,
   detectJavaRuntime,
   getMinecraftVersion,
   KNOWN_VERSIONS,
@@ -14,15 +15,28 @@ import {
   listAppletClasses,
   MinecraftLaunchError,
   resolveMinecraftLayout,
-  type MinecraftGame
+  type MinecraftGame,
+  type MinecraftLayout
 } from '@mcanextgen/runtime'
 import {
   GameWindowTracker,
   supportsNativeWindowCapture,
   type NativeWindowInfo
 } from '@mcanextgen/native-win32'
+import {
+  beginEmbedding,
+  detachEmbedding,
+  dropAfterGameExit,
+  endEmbedding,
+  getEmbedError,
+  hwndToNumber,
+  isEmbeddingActive,
+  setEmbedBounds
+} from './embedding'
 import type {
   MinecraftAppletList,
+  MinecraftEmbedBoundsView,
+  MinecraftEmbedView,
   MinecraftLaunchOptionsView,
   MinecraftStateView,
   MinecraftVersionOptionView,
@@ -49,6 +63,14 @@ let windowTracker: GameWindowTracker | null = null
 let detectedWindow: NativeWindowInfo | null = null
 let windowSeen = false
 
+/**
+ * Embedding policy for the current session, resolved at launch from the
+ * registry override / capability probe (see runtime capabilities.ts). The
+ * renderer lays its slot out from this even before the game window appears;
+ * `beginEmbedding` only runs once the tracker actually finds the window.
+ */
+let sessionEmbedView: MinecraftEmbedView | null = null
+
 function resetWindowTracking(): void {
   windowTracker?.stop()
   windowTracker = null
@@ -63,9 +85,13 @@ function startWindowTracking(session: MinecraftGame): void {
     onFound: (window) => {
       detectedWindow = window
       windowSeen = true
+      if (sessionEmbedView) {
+        beginEmbedding({ gameHwnd: hwndToNumber(window.hwnd), ...sessionEmbedView })
+      }
     },
     onLost: () => {
       detectedWindow = null
+      endEmbedding()
     }
   })
   windowTracker.start()
@@ -73,7 +99,15 @@ function startWindowTracking(session: MinecraftGame): void {
 
 function buildWindowView(running: boolean, pid: number | null): MinecraftWindowView {
   const supported = supportsNativeWindowCapture()
-  const base = { supported, hwnd: null, pid, className: null, title: null }
+  const base = {
+    supported,
+    hwnd: null,
+    pid,
+    className: null,
+    title: null,
+    embedded: isEmbeddingActive(),
+    embedError: getEmbedError()
+  }
   if (!supported || !running || !pid) return { ...base, state: 'none' }
   if (detectedWindow) {
     return {
@@ -100,7 +134,33 @@ function toView(): MinecraftStateView {
     exitCode: exit?.code ?? null,
     exitSignal: exit?.signal ?? null,
     error: lastError,
-    window: buildWindowView(running, game?.pid ?? null)
+    window: buildWindowView(running, game?.pid ?? null),
+    embed: sessionEmbedView
+  }
+}
+
+/**
+ * Embedding policy for one launch: the registry override wins, otherwise the
+ * offline capability probe decides (`resizable` only when the game loop
+ * actually polls the canvas size — see runtime capabilities.ts). The probe
+ * reads class files in-process; if anything about the jar goes wrong we fall
+ * back to `fixed`, which is the safe layout (never stretched, clip-cropped).
+ */
+function resolveEmbedView(
+  layout: MinecraftLayout,
+  version: { resizePolicy?: 'fixed' | 'resizable'; width: number; height: number },
+  entryClass: string
+): MinecraftEmbedView {
+  let resizable = false
+  try {
+    resizable = detectEntryCapabilities(layout, entryClass).resizable
+  } catch {
+    resizable = false
+  }
+  return {
+    policy: version.resizePolicy ?? (resizable ? 'resizable' : 'fixed'),
+    gameWidth: version.width,
+    gameHeight: version.height
   }
 }
 
@@ -180,17 +240,38 @@ export async function launchMinecraftView(
       // default (undefined).
       fixesEnabled: options?.fixesEnabled ?? undefined,
       extraParameters: options?.extraParameters ?? undefined,
-      appletClass: options?.appletClass ?? undefined
+      appletClass: options?.appletClass ?? undefined,
+      // Embedding policy for the Java host's *startup* position. When native
+      // capture is available the host takes over the window, so the Java frame
+      // parks itself off-screen to avoid the top-left flash + □× caption residue
+      // while docking. The frame still starts DECORATED (an undecorated
+      // SunAwtFrame breaks LWJGL2's parented mode — plan.md risk #4 reversal);
+      // decorations are stripped natively at embed time, which the pure-native
+      // PoC proved stable for AWT peers (the style never revives).
+      embedded: supportsNativeWindowCapture(),
+      onOutput: (line) => console.error(`[java ${version.id}] ${line}`)
     })
+    // Decide the embedding policy before tracking starts: the probe is
+    // offline (bytecode), so this never waits on the JVM. Computed on the
+    // entry the game will actually run (panel override or registry default).
+    sessionEmbedView = resolveEmbedView(
+      layout,
+      version,
+      options?.appletClass ?? version.appletClass
+    )
     startWindowTracking(game)
     game.onExit(() => {
-      // The process (and its window) is gone; stop watching but keep the
-      // finished session around so the panel can show pid/exit code until
-      // the next launch.
+      // The process (and its window) is gone; drop the container (the game
+      // HWND vanished with it, so there is nothing to unembed) and stop
+      // watching, but keep the finished session around so the panel can show
+      // pid/exit code until the next launch.
+      dropAfterGameExit()
+      sessionEmbedView = null
       resetWindowTracking()
     })
   } catch (error) {
     game = null
+    sessionEmbedView = null
     lastError =
       error instanceof MinecraftLaunchError
         ? error.message
@@ -202,6 +283,10 @@ export async function launchMinecraftView(
 }
 
 export function stopMinecraftView(): MinecraftStateView {
+  // Unembed while the game window is still alive: the frame returns to a
+  // decorated top-level before the process is killed (teardown hard rule).
+  detachEmbedding()
+  sessionEmbedView = null
   game?.stop()
   return toView()
 }
@@ -210,8 +295,24 @@ export function getMinecraftStatusView(): MinecraftStateView {
   return toView()
 }
 
-/** Terminates the game when the host quits (Phase 1: game is a child process). */
+/**
+ * Renderer reported the embedding slot's rect (physical px, client coords);
+ * main positions the clip container and the game window inside it to match.
+ */
+export function setMinecraftEmbedBoundsView(
+  bounds: MinecraftEmbedBoundsView
+): MinecraftStateView {
+  setEmbedBounds(bounds)
+  return toView()
+}
+
+/**
+ * Terminates the game when the host quits: detach the embedding first (the
+ * BrowserWindow's own `close` hook covers window destruction; this is the
+ * before-quit path), then stop the child process.
+ */
 export function shutdownMinecraft(): void {
+  detachEmbedding()
   resetWindowTracking()
   game?.stop()
 }

@@ -84,6 +84,13 @@ export interface MinecraftVersion {
    * Server/Port inputs per version; confirmed from classic 0.0.15a onward).
    */
   supportsMultiplayer?: boolean
+  /**
+   * Embedding overrides for the offline capability probe
+   * (`capabilities.ts`): when set, the registry wins over the bytecode
+   * verdict. Only declare one if the probe measurably misreads a version.
+   */
+  supportsFullscreen?: boolean
+  resizePolicy?: 'fixed' | 'resizable'
   width: number
   height: number
 }

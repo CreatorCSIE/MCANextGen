@@ -10,6 +10,7 @@ import java.awt.Toolkit;
 import java.awt.geom.AffineTransform;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Map;
 
 /**
@@ -250,6 +251,140 @@ public final class Patches {
         applet.add((Component) canvas, BorderLayout.CENTER);
         canvas.setFocusable(true);
         applet.validate();
+    }
+
+    /**
+     * Applet 鼠标死锁防护（plan.md 风险 #3，jstack 实测三环死锁）：
+     * applet 模式下游戏每帧在 AWTTreeLock 内调 canvas.getLocationOnScreen/
+     * MouseInfo.getPointerInfo/Robot.mouseMove（native AWT 调用，等 AWT_LOCK），
+     * 而失焦时点击游戏会让 LWJGL 的 wndproc grabFocus() 在 EDT 上
+     * requestWindowFocus——EDT 持 AWT_LOCK 做跨线程 SetFocus，等游戏线程处理
+     * WM_KILLFOCUS，游戏线程却卡在 AWT_LOCK 上无法回到消息泵：游戏线程 /
+     * EDT / AWT-Windows 三方死锁，Back to game 或失焦再聚焦时必现（浏览器
+     * Applet 时代的通病，与宿主无关）。
+     * 修法：把游戏的 applet 模式标志翻成 false，run 循环从此走 standalone
+     * 鼠标分支（Mouse.setGrabbed + LWJGL 原生光标，纯 native、零 AWT），游戏
+     * 线程退出锁环。显示仍保持 parented——javap 纠正：create vs setParent 的
+     * 决策点是 Canvas 字段（B != null → Display.setParent(B)），与此标志无
+     * 关，21a 的 MinecraftApplet.init 本来就走 new d(canvas, w, h, …)，随时翻
+     * 都安全。标志的另一语义是本地 level.dat 存读（g=false 才启用），对嵌入
+     * 无害（Betacraft 在 Linux 上用同款翻转修鼠标卡顿，见 plan.md 风险 #3）。
+     * 嵌入场景下 LWJGL 原生键鼠依赖 Win32 焦点落到其子窗口，由 Electron 侧
+     * 焦点转发保证（embedding.ts focusGameInput / native focusNativeWindow）。
+     */
+    public static void protectAppletMouseMode(Applet applet) {
+        try {
+            Field mcField = findField(applet.getClass(), "minecraft", "a", "b", "c");
+            if (mcField == null) {
+                return;
+            }
+            Object game = mcField.get(applet);
+            if (game == null) {
+                return;
+            }
+            final Class<?> gameClass = game.getClass();
+            final Object gameInstance = game;
+            final ClassLoader loader = applet.getClass().getClassLoader();
+            Thread guard = new Thread(() -> {
+                // 等 Display.setParent 落地再翻。功能上非必需（决策点是 Canvas
+                // 字段，见上），但等到窗口就绪可避免与 create 早期的重活抢跑，
+                // 字段名对不上时退化为固定延时。
+                long deadline = System.currentTimeMillis() + 20000L;
+                boolean parented = false;
+                try {
+                    Class<?> wd = loader.loadClass("org.lwjgl.opengl.WindowsDisplay");
+                    Field inst = wd.getDeclaredField("current_display");
+                    inst.setAccessible(true);
+                    Field parent = wd.getDeclaredField("parent");
+                    parent.setAccessible(true);
+                    while (System.currentTimeMillis() < deadline) {
+                        Object display = inst.get(null);
+                        if (display != null && parent.get(display) != null) {
+                            parented = true;
+                            break;
+                        }
+                        Thread.sleep(100L);
+                    }
+                } catch (Throwable ignored) {
+                }
+                if (!parented) {
+                    try {
+                        Thread.sleep(3000L);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+                // 2) 翻标志。
+                try {
+                    Field flag = locateAppletModeFlag(gameClass, gameInstance);
+                    if (flag == null) {
+                        System.err.println("[mcanextgen][mouse] 未识别 applet 模式字段，"
+                                + "死锁防护未启用（Back to game 可能仍会冻结）");
+                        return;
+                    }
+                    flag.setBoolean(gameInstance, false);
+                    System.out.println("[mcanextgen][mouse] " + gameClass.getSimpleName()
+                            + "." + flag.getName() + " -> false（鼠标切到 LWJGL 原生捕获，"
+                            + "AWT Robot 分支已关闭）");
+                } catch (Throwable t) {
+                    System.err.println("[mcanextgen][mouse] 翻转 applet 模式标志失败: " + t);
+                }
+            }, "mcanextgen-mouse-guard");
+            guard.setDaemon(true);
+            guard.start();
+        } catch (Throwable t) {
+            System.err.println("[mcanextgen][mouse] 防护线程创建失败: " + t);
+        }
+    }
+
+    /** 名字优先（经典系 g、tiny-mappings appletMode），未命中再结构兜底。 */
+    private static Field locateAppletModeFlag(Class<?> gameClass, Object game) {
+        Field byName = findBooleanField(gameClass, "g", "appletMode");
+        if (byName != null) {
+            return byName;
+        }
+        // 结构性兜底只在带 Robot 字段（applet 鼠标模拟的确证）的类上做。
+        if (findFieldOfType(gameClass, java.awt.Robot.class) == null) {
+            return null;
+        }
+        Field unique = null;
+        int candidates = 0;
+        for (Class<?> c = gameClass; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Field f : c.getDeclaredFields()) {
+                int mod = f.getModifiers();
+                if (f.getType() != boolean.class
+                        || !Modifier.isPublic(mod) || Modifier.isVolatile(mod)) {
+                    continue;
+                }
+                try {
+                    f.setAccessible(true);
+                    if (Boolean.TRUE.equals(f.get(game))) {
+                        unique = f;
+                        candidates++;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        // 唯一候选才敢翻；多个 true 值 public 布尔时宁可不修也不能误伤。
+        return candidates == 1 ? unique : null;
+    }
+
+    /** 依次按候选名找 boolean 字段（沿父类链）。 */
+    private static Field findBooleanField(Class<?> type, String... names) {
+        for (Class<?> c = type; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (String name : names) {
+                try {
+                    Field f = c.getDeclaredField(name);
+                    if (f.getType() == boolean.class) {
+                        f.setAccessible(true);
+                        return f;
+                    }
+                } catch (NoSuchFieldException ignored) {
+                }
+            }
+        }
+        return null;
     }
 
     /** 只接受 int 字段的查找（尺寸字段专用，见 rewriteGameSizeFields 的注释）。 */

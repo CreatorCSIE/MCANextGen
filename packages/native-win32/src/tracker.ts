@@ -10,7 +10,11 @@
  * there is a message loop to attach to anyway.
  */
 
-import { findGameWindow, type NativeWindowInfo } from './windows'
+import {
+  findGameWindow,
+  isWindowAliveForPid,
+  type NativeWindowInfo
+} from './windows'
 
 export interface GameWindowTrackerEvents {
   /** Fired when the game window appears (or its handle changes on restart). */
@@ -50,13 +54,27 @@ export class GameWindowTracker {
 
   private poll(): void {
     const found = findGameWindow(this.pid)
-    if (found && found.hwnd !== this.current?.hwnd) {
-      this.current = found
-      this.events.onFound(found)
-    } else if (!found && this.current) {
-      const lost = this.current
-      this.current = null
-      this.events.onLost(lost)
+    if (found) {
+      if (found.hwnd !== this.current?.hwnd) {
+        // Anti-hijack: while the window we already track is alive, a *new*
+        // candidate never steals it — the process can own several look-alike
+        // top-level windows over its lifetime (and once the game frame is
+        // embedded it leaves EnumWindows, so anything still enumerated is
+        // somebody else). Re-fires onFound only after the old handle died.
+        if (this.current && isWindowAliveForPid(this.current.hwnd, this.pid)) return
+        this.current = found
+        this.events.onFound(found)
+      }
+      return
     }
+    if (!this.current) return
+    // `EnumWindows` only sees top-level windows, so an embedded (reparented
+    // WS_CHILD) game window correctly vanishes from enumeration. That is not
+    // a loss — confirm the last handle is still a live, pid-owned window
+    // before declaring it gone.
+    if (isWindowAliveForPid(this.current.hwnd, this.pid)) return
+    const lost = this.current
+    this.current = null
+    this.events.onLost(lost)
   }
 }
