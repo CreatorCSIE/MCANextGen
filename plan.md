@@ -524,25 +524,38 @@ lands on fixed/no-F11 naturally.
 
 After the basic reparenting PoC succeeds:
 
-* [ ] Synchronize host resize → Minecraft resize (per `resizePolicy`; `fixed` versions
-  never receive a size change — maximize only grows the surrounding chrome)
-* [ ] Handle focus changes
-* [ ] Handle mouse capture
-* [ ] Handle keyboard focus
-* [ ] Handle minimize/restore
-* [ ] Handle Minecraft process exit
-* [ ] Handle host process exit
+* [x] Synchronize host resize → Minecraft resize (per `resizePolicy`; `fixed` versions
+  never receive a size change — maximize only grows the surrounding chrome). The channel
+  shipped with Phase 3 embedding (renderer bounds IPC → `gameRect` per policy →
+  `moveClipContainer` + `resizeEmbeddedGame`, rAF-throttled physical rects); the
+  resizable half still awaits an Indev/Infdev live measurement.
+* [x] Handle focus changes (host `focus`/`blur` hooks drive `focusNativeWindow` /
+  `clearNativeFocus` — risk #3 resolved chain)
+* [x] Handle mouse capture (LWJGL native branch via the applet-mouse guard; capture and
+  clipCursor round-trips live-verified)
+* [x] Handle keyboard focus (focus forwarding to the `LWJGL` child HWND, live-verified)
+* [ ] Handle minimize/restore (expected to come free with WS_CHILD semantics — the clip
+  and its children hide/restore with the Electron top-level — but unmeasured)
+* [x] Handle Minecraft process exit (Stop live-verified; tracker onLost + teardown)
+* [x] Handle host process exit (window close live-verified; unembed-before-destroy order
+  held, detach flash fixed by off-screen parking in `unembedGameWindow`)
 * [ ] Handle Minecraft restart
-* [ ] Handle DPI scaling
-* [ ] Handle window destruction
+* [ ] Handle DPI scaling (physical-px rect transport is in place; per-monitor DPI change
+  recompute and the java DPI-unaware stretch remain to be measured)
+* [x] Handle window destruction (the game window vanishing without process exit →
+  `GameWindowTracker` onLost; for an embedded WS_CHILD frame "lost" is decided by
+  `IsWindow`+pid, not by re-enumeration — Phase 2 design)
 * [ ] F11 remapping: the game's own fullscreen must never run against an embedded
   window. AWT-route fullscreen (Frame API) is intercepted Java-side (host Frame
   subclass → stdout event → host enters `setFullScreen(true)` and grows the
   container; the game adapts via its canvas poll). LWJGL-route F11 is polled input
   the Frame cannot see, so either the same host-driven fullscreen is offered and the
   game's F11 is swallowed Java-side, or a Display shim shadows `setFullscreen` —
-  decide by measurement (press F11 in embedded Indev/Infdev and record what happens)
-* [ ] Enforce host minimum window size from the embedded window's native size
+  decide by measurement (press F11 in embedded Indev/Infdev and record what happens).
+  NOT implemented; the capability probe already decides where it would install
+  (`supportsFullscreen` false for all Classic/isom entries, true for Indev/Infdev).
+* [ ] Enforce host minimum window size from the embedded window's native size (a static
+  `minWidth: 640` exists today)
 
 The embedded Minecraft window should behave as part of the MCANextGen window.
 
