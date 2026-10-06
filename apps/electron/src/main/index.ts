@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu } from 'electron'
 import { fileURLToPath, URL } from 'node:url'
 import {
   IPC,
@@ -101,6 +101,17 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  // Kill the default application menu. On Windows/Linux it binds F11 to
+  // "Toggle Full Screen", and `autoHideMenuBar` hides the bar without
+  // disabling the accelerator. With keyboard focus living in the embedded
+  // game's LWJGL window (attached input queue, focus forwarding), Chromium
+  // dispatches accelerators only while it still sees the key messages: the
+  // first F11 fullscreens the WHOLE host window (looks like "the game went
+  // fullscreen once"), later presses never round-trip, and window
+  // manipulation transiently restores dispatch — a host/game input race.
+  // The host must not steal keys from the game; F11 remapping proper is
+  // Phase 4 work on top of a menu-free baseline.
+  Menu.setApplicationMenu(null)
   registerIpc()
   createWindow()
 

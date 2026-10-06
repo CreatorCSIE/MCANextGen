@@ -502,9 +502,37 @@ lands on fixed/no-F11 naturally.
    shows and renders.
 5. teardown ordering (see architecture above)
 6. `Display.setFullscreen` reachability: the game jars do not bundle LWJGL but the
-   launcher classpath provides it, so F11 paths are loadable — pressing F11 inside an
-   embedded Indev may crash or escape the embedding; Phase 4 remapping removes the
-   call path entirely (probe decides whether to install it)
+   launcher classpath provides it, so F11 paths are loadable — CONFIRMED ESCAPE
+   (2026-10 live): the first press detached the game from the clip container into a
+   real top-level fullscreen window (and switched the desktop resolution); the second
+   press was re-parented back but at the stale startup size, because LWJGL 2.9.3
+   `setDisplayModeAndFullscreenInternal` → `createWindow(isFullscreen() ? null :
+   parent)` deliberately breaks out of the parent, and the windowed rebuild sizes the
+   peer from the AWT canvas's never-updated width/height (host MoveWindow only moves
+   the native frame). Earlier "F11 works once then dead" noise was a separate bug:
+   Electron's default menu bound F11 (accelerator live even with `autoHideMenuBar`);
+   baseline fixed by `Menu.setApplicationMenu(null)`.
+   ATTEMPTED FIX — Display-layer shadow guard, REVERTED (2026-10). A `runtime/lwjgl-patch`
+   shadow jar rebuilt `org.lwjgl.opengl.Display` so `setDisplayModeAndFullscreenInternal`
+   returned early while `parent != null`. Live test made it WORSE: F11 left the container
+   filled with a giant pixelated dirt tile + a small grey fragment in a corner (broken
+   render, unrecoverable without restart). Bytecode root cause (`net.minecraft.client.d.d()`
+   in Indev 20100223, the F11 handler): the game flips its OWN fullscreen flag `E` and
+   recomputes its internal viewport `b/c` from `Display.getDisplayMode().getWidth()/
+   getHeight()`; the main-loop canvas-poll resize that would re-sync `b/c` to the real
+   canvas is gated behind `if (canvas != null && !E)`. So once `E` is set, the poll is
+   disabled and `b/c` stay pinned to whatever `getDisplayMode()` returned — and because
+   the guard turned `setDisplayMode` into a no-op, that is the stale windowed mode, not
+   the actual (host-resized) canvas. The game's viewport then mismatches the framebuffer
+   → the giant-dirt artifact. CONCLUSION: the fullscreen decision lives in GAME state
+   (`E`, `b`, `c`), which a `Display`-layer interception cannot reach. Reverted to vanilla
+   (F11 escapes; each state renders correctly, embedding is lost only during fullscreen).
+   Correct fixes, both above the Display layer: (A) swallow F11 at `org.lwjgl.input.
+   Keyboard` so `d()` never runs (truly inert, no escape, no breakage) — needs a Keyboard
+   shadow, more invasive than Display; (B) host-driven fullscreen (Phase 4): Electron owns
+   `setFullScreen` + clip-container growth, the game stays windowed and adapts via its
+   canvas poll (the poll already re-syncs `b/c` to `Canvas.getWidth/Height` while `E` is
+   false), and F11 is intercepted before the game sees it. (B) is the intended path.
 7. **CONFIRMED**: Chromium's DirectComposition visual tree (`Intermediate D3D Window`)
    paints above all plain child HWNDs regardless of z-order — embedded native windows
    are invisible unless the host runs with `--disable-direct-composition` (see
@@ -546,14 +574,19 @@ After the basic reparenting PoC succeeds:
   `GameWindowTracker` onLost; for an embedded WS_CHILD frame "lost" is decided by
   `IsWindow`+pid, not by re-enumeration — Phase 2 design)
 * [ ] F11 remapping: the game's own fullscreen must never run against an embedded
-  window. AWT-route fullscreen (Frame API) is intercepted Java-side (host Frame
-  subclass → stdout event → host enters `setFullScreen(true)` and grows the
-  container; the game adapts via its canvas poll). LWJGL-route F11 is polled input
-  the Frame cannot see, so either the same host-driven fullscreen is offered and the
-  game's F11 is swallowed Java-side, or a Display shim shadows `setFullscreen` —
-  decide by measurement (press F11 in embedded Indev/Infdev and record what happens).
-  NOT implemented; the capability probe already decides where it would install
-  (`supportsFullscreen` false for all Classic/isom entries, true for Indev/Infdev).
+  window. NOT implemented — currently F11 takes the vanilla LWJGL path (escapes to a
+  top-level fullscreen window, second press re-parents at the stale startup size; see
+  risk #6). A `Display`-layer shadow guard was tried and REVERTED (risk #6): the game's
+  fullscreen flag + viewport size are GAME state that a Display interception can't
+  reach, and blocking `setDisplayMode` mid-toggle desynced the game's viewport → broken
+  render. Correct path is host-driven fullscreen: Electron owns `setFullScreen(true)` +
+  clip-container growth, the game stays windowed and adapts via its existing canvas poll
+  (which re-syncs its size to `Canvas.getWidth/Height` while its fullscreen flag is
+  false), and F11 is intercepted before the game's toggle handler runs (AWT-route Frame
+  interception for Applet-era entries; for the LWJGL polled-input route either swallow
+  F11 in a `Keyboard` shadow or drive it via a stdout event). The capability probe
+  already decides where any of this installs (`supportsFullscreen` false for all
+  Classic/isom entries, true for Indev/Infdev).
 * [ ] Enforce host minimum window size from the embedded window's native size (a static
   `minWidth: 640` exists today)
 

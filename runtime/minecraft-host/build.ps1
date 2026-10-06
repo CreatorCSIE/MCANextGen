@@ -1,4 +1,4 @@
-# 编译 MCANextGen Java 启动器（目标版本 1.8，需要 JDK 8）
+﻿# 编译 MCANextGen Java 启动器（目标版本 1.8，需要 JDK 8）
 # 用法：powershell -File runtime/minecraft-host/build.ps1
 # 可通过 $env:JAVA_HOME_8 指定 JDK 8 根目录，否则使用 PATH 中的 javac/jar。
 $ErrorActionPreference = "Stop"
