@@ -1,6 +1,11 @@
 > [!IMPORTANT]
-> **项目状态提示**：本项目处于**早期开发阶段**。已完成：工程脚手架（Phase 0）、**Java 运行时自动探测**、**Classic 核心启动**（Phase 1）、**原生窗口句柄捕获**（Phase 2）与 **Windows 子窗口嵌入（Phase 3）**——游戏窗口现已作为原生子窗口嵌入宿主窗口内的固定槽位，Classic 0.0.21a_01 的渲染、键盘/鼠标输入、焦点转发与 Stop/关窗拆卸均已实机验证；另有 `dpi_fix` / `15a_server_patch` 两项补丁（实测生效）、离线的 Applet 入口枚举与**能力探测**（纯字节码解析、不起 JVM）。Phase 4（嵌入窗口管理）已大半落地：**宿主缩放同步通道**（bounds IPC → 按 resizePolicy 布局）、焦点/捕获/键盘焦点处置、进程与窗口拆卸均已完成——尚待实测或实现的是：resizable 版本（Indev/Infdev）的动态缩放实测、**F11 重映射**（未实现，能力探测已划定安装范围）、minimize/restore 与 DPI 细节实测、重启与按原生尺寸推导最小窗。当前 fixed 版本以原生分辨率在槽位居中显示、不做拉伸。
-> *Status Notice: the scaffolding, the Java runtime probe, the core launch path (Phase 1), native window-handle capture (Phase 2) and Windows child-window embedding (Phase 3) are done — the game's native window is now reparented into a slot inside the host window, with rendering, keyboard/mouse input, focus forwarding and clean teardown live-verified on Classic 0.0.21a_01; the ported `dpi_fix` / `15a_server_patch` fixes, offline JVM-free Applet entry enumeration and the capability probe are all in place. Most of Phase 4 (embedded window management) has landed with the embedding: the host-resize synchronization channel, focus/capture/keyboard handling and process/window teardown are implemented; what remains is the resizable-build (Indev/Infdev) live measurement, **F11 remapping** (not yet implemented; the capability probe already scopes where it installs), minimize/restore and DPI details to be measured, and restart handling.*
+> **本项目已归档（Archived · 只读）**：开发已于 **2026-10** 停止，仓库随后将在 GitHub 上标记为 Public Archive（只读）。
+>
+> **暂停原因**：本项目的核心理念是「**不做又一款 Minecraft 启动器**，而是在桌面端重建当年『浏览器 + Applet』的运行时关系」。但在推进过程中发现，这一独特定位与「再造一款 Minecraft 启动器」的实际方向高度重叠——差异化被稀释，继续投入的意义有限，故决定停止开发并公开归档。
+>
+> 仓库代码、[plan.md](./plan.md) 与本文档作为「**将原生 Java / LWJGL 游戏窗口以 Win32 子窗口方式嵌入宿主窗口**」这一技术路线的完整实现记录予以保留：Phase 0–3 全线实机闭环，Phase 4（嵌入窗口管理）亦大半落地，对同类嵌入 / 窗口捕获 / 焦点转发需求仍有参考价值。
+>
+> *This project is now **archived (read-only)** — development stopped in **2026-10** and the repository will be marked as a Public Archive on GitHub. The core premise — "not another Minecraft launcher, but rebuilding the browser + Applet runtime relationship on the desktop" — turned out to overlap heavily with the very "yet another launcher" direction it set out to avoid, diluting its uniqueness; further work no longer justified itself. The code, [plan.md](./plan.md) and this document are kept as a complete implementation record of embedding a native Java / LWJGL game window as a Win32 child window (Phase 0–3 fully closed on real hardware, most of Phase 4 landed), and remain useful reference for similar embedding / window-capture / focus-forwarding problems.*
 
 # MCANextGen - 旧版 Minecraft Applet 桌面宿主 (Legacy Minecraft Applet Desktop Host)
 
@@ -16,7 +21,7 @@ Browser                            MCANextGen Host
         └── LWJGL                          └── LWJGL
 ```
 
-完整开发计划与架构见 [plan.md](./plan.md)。
+完整开发计划与架构见 [plan.md](./plan.md)（历史存档，随归档停止推进）。
 
 ---
 
@@ -35,7 +40,7 @@ Browser                            MCANextGen Host
 - **Applet 时代死锁消除 + 宿主焦点转发（已可用）**：「失焦后点 Back to game 冻结」的 Applet 通病在此复现，被三份间隔 3 分钟的 jstack 抓成现行——三方 AWT 死锁（游戏线程持 AWTTreeLock 逐帧进 AWT native ↔ EDT 持 AWT_LOCK 等 Win32 SetFocus ↔ AWT-Windows）。宿主以 `protectAppletMouseMode` 反射翻掉游戏的 applet 鼠标模式标志、把鼠标切到 LWJGL 原生捕获分支（与 Betacraft v1 wrapper 的 Linux mouse fix 同款手法），死锁环失去一边；随之而来的是嵌入场景下 LWJGL 子窗拿不到 Win32 键盘焦点的输入缺口——由宿主**焦点转发**补齐：无消息枚举子窗锁定 `LWJGL` 焦点目标，`AttachThreadInput` + `SetFocus` 跨线程边界送达（触发点：`BrowserWindow focus` 与渲染层非交互区点击转发）；`blur` 侧对称地 `SetFocus(NULL)` 让游戏收到真实 WM_KILLFOCUS（弹暂停菜单、释放鼠标捕获）。已知残留：焦点住在 attach 队列里时 Chromium 的 `blur` 事件不保证触发，Alt+Tab 后游戏可能短暂保持聚焦（视觉级，输入正确性优先，详见 plan.md 风险登记 #3）。
 - **能力探测（已可用，纯离线）**：与入口枚举同一套 jar 内字节码解析，判定每个入口类的 **`resizable`**（游戏主循环是否逐帧轮询 canvas 尺寸）与 **`supportsFullscreen`**（F11 按键检查与全屏 API 引用必须共现）——嵌入策略由字节码证据决定而非年代猜测；锚点全部带 owner/邻接限定（owner 盲的 `getWidth()I` 会误中 Classic 的 `DisplayMode.getWidth`），6 个已注册 entry 的判定与 javap 地面真值逐行对齐。
 - **嵌入窗口管理（Phase 4，大半已随嵌入链路落地）**：宿主缩放同步通道（渲染层物理 rect → 主进程 → 按 `resizePolicy` 布局：fixed 居中不拉伸、resizable 随容器 `MoveWindow`）、焦点变化/鼠标捕获/键盘焦点处置、游戏进程退出与宿主关窗拆卸——均已实现（resizable 半侧待 Indev/Infdev 实测）。**尚未实现/待实测**：F11 重映射（当前游戏侧 F11 走 LWJGL 原版路径——嵌入下会脱父逃逸成真全屏、二次按回弹到启动分辨率；曾尝试用 shadow jar 在 `Display` 层惰性化全屏，但字节码证实游戏把全屏标志与内部视口尺寸耦合在 `DisplayMode` 上、`Display` 层拦不住游戏自身状态，遂回退，详见 plan.md 风险 #6；正确解法是宿主代理全屏或 LWJGL `Keyboard` 层吞掉 F11）、minimize/restore 与每显示器 DPI 变化、游戏重启、按嵌入窗口原生尺寸推导宿主最小窗（当前为静态 640）。
-- **规划中（按 plan.md 阶段推进）**：Applet 风格 UI、更多历史版本、Linux 支持、Tauri Edition。
+- **未及实现（随归档停止）**：Applet 风格正式 UI、更多历史版本、Linux 支持、Tauri Edition——这些原按 plan.md 阶段推进的后续项，均未在归档前落地，保留在 `plan.md` 中作为设计意图记录。
 
 ---
 
@@ -65,7 +70,7 @@ Browser                            MCANextGen Host
 ### 1. Java 运行环境（游戏侧必需）
 
 - **推荐版本：64 位 Java 8（JRE 或 JDK 均可）**，探测逻辑会优先命中它；**32 位 Java 8** 仅作为没有 64 位时的回退。
-- **归档支持：Java 6 ~ Java 7**（部分极端怀旧的早期 Applet 在 Java 8 下存在渲染 Bug，规划中允许按版本指定更低版本）。
+- **兼容 Java 6 ~ Java 7**（部分极端怀旧的早期 Applet 在 Java 8 下存在渲染 Bug，设计上允许按版本指定更低版本，但随归档未实装）。
 - 探测**不依赖 `PATH` 里第一个 `java` 是谁**：即使系统默认 `java` 已是 Java 21 / 25，只要机器上装有 Java 8 就能被找到并选中。
 
 > 如需下载 Oracle Java，可参考：
@@ -77,7 +82,7 @@ Browser                            MCANextGen Host
 
 - **Node.js >= 20.19**
 - **pnpm 10**（仓库已声明 `packageManager: pnpm@10.x`，建议 `corepack enable` 后直接 `pnpm install`）
-- 操作系统：**Windows x86_64 优先**（原生窗口嵌入相关实现依赖 Win32），Linux 支持排在 Phase 9
+- 操作系统：**Windows x86_64 优先**（原生窗口嵌入相关实现依赖 Win32）；Linux 支持原排在 Phase 9，随归档未实现
 
 ---
 
@@ -110,7 +115,7 @@ pnpm preview
 pnpm typecheck
 ```
 
-> **CI（临时最简闸门）**：上述 `typecheck` / `build` 以及「用 JDK 8 重编 `mcanextgen-host.jar`」已在 GitHub Actions 中自动化——`push`（main/master）与所有 PR 触发，见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。所有客户端 jar 均被 gitignore，CI 不依赖任何受版权保护资产、也不启动游戏；待后续阶段（嵌入窗口管理、打包产物、跨平台矩阵）引入后本工作流会被替换。
+> **CI（归档前的最简闸门）**：上述 `typecheck` / `build` 以及「用 JDK 8 重编 `mcanextgen-host.jar`」已在 GitHub Actions 中自动化——`push`（main/master）与所有 PR 触发，见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。所有客户端 jar 均被 gitignore，CI 不依赖任何受版权保护资产、也不启动游戏。仓库归档后该工作流作为快照保留，不再随后续阶段演进。
 
 ### 2. 仓库结构 (Repository Layout)
 
@@ -147,10 +152,12 @@ MCANextGen
 
 ## 🌐 Localization / 国际化与多语言支持
 
-本项目（包含宿主界面与文档）随时欢迎社区提供多语言本地化（i18n）与翻译支持！
-*This repository, host UI, and documentation welcome community contributions for localization (i18n) and translations at any time!*
+本项目（包含宿主界面与文档）曾欢迎社区提供多语言本地化（i18n）与翻译支持。
+*This repository, host UI, and documentation previously welcomed community contributions for localization (i18n) and translations.*
 
-如果你希望为本项目贡献其他语言（如 English、繁體中文等）的 README 文档或界面翻译，欢迎随时提交 **Pull Request** 或开 **Issue** 讨论！
+> **归档说明**：仓库现为**只读存档**，不再接受新的 Pull Request。若你希望继续本地化或在此基础上二次开发，欢迎 **Fork** 后自行推进——本仓库以 GPL v3 授权，代码与文档可自由取用。
+>
+> *The repository is now a **read-only archive** and no longer accepts new pull requests. If you'd like to continue localization or build on this work, please **fork** it — the project is licensed under GPL v3, so the code and docs are free to reuse.*
 
 ---
 
